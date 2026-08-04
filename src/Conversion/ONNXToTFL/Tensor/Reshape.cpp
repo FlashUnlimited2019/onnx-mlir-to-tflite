@@ -4,6 +4,8 @@
 
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
+#include <limits>
+
 using namespace mlir;
 
 namespace onnx_mlir {
@@ -29,6 +31,13 @@ public:
     // The inferred static result shape is authoritative. Materializing it
     // avoids ONNX's zero/-1 shape encoding leaking into TFL Reshape semantics.
     auto resultType = cast<RankedTensorType>(op->getResult(0).getType());
+    if (llvm::any_of(resultType.getShape(), [](int64_t dimension) {
+          return dimension > std::numeric_limits<int32_t>::max();
+        })) {
+      op.emitError(
+          "unsupported Reshape result: dimension exceeds TFLite int32 shape");
+      return failure();
+    }
     Value shape =
         createI32ShapeConstant(rewriter, op.getLoc(), resultType.getShape());
     Operation *newOp = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
