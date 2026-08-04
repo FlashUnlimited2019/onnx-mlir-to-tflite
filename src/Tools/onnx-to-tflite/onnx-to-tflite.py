@@ -113,7 +113,16 @@ def main() -> int:
         verified_mlir_path = work_dir / "verified-roundtrip.mlir"
 
         _run(
-            [str(onnx_mlir), str(input_path), "--EmitONNXIR", "-o", str(onnx_prefix)],
+            [
+                str(onnx_mlir),
+                str(input_path),
+                "--EmitONNXIR",
+                # Keep Conv in ONNX dialect for the future layout-aware
+                # ONNXToTFL lowering instead of decomposing it to Im2Col/Gemm.
+                "--disable-conv-to-matmul",
+                "-o",
+                str(onnx_prefix),
+            ],
             "ONNX import",
         )
         opt_command = [
@@ -161,7 +170,23 @@ def main() -> int:
         )
 
         # Only publish a file after export and schema round-trip validation.
-        os.replace(flatbuffer_path, output_path)
+        # Stage it next to the destination so the final atomic rename never
+        # crosses a filesystem boundary (the work directory is usually /tmp).
+        staged_path: Path | None = None
+        try:
+            with flatbuffer_path.open("rb") as source, tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=f".{output_path.name}.",
+                dir=output_path.parent,
+                delete=False,
+            ) as staged:
+                shutil.copyfileobj(source, staged)
+                staged_path = Path(staged.name)
+            os.replace(staged_path, output_path)
+            staged_path = None
+        finally:
+            if staged_path is not None:
+                staged_path.unlink(missing_ok=True)
 
         if args.dump_onnx_mlir:
             shutil.copy2(onnx_mlir_path, output_path.with_suffix(".onnx.mlir"))
