@@ -10,6 +10,7 @@ from onnx import TensorProto, helper, numpy_helper
 
 SEED = 20260804
 OPSET = 18
+IR_VERSION = 11
 
 
 def save(graph: onnx.GraphProto, path: Path) -> None:
@@ -18,6 +19,9 @@ def save(graph: onnx.GraphProto, path: Path) -> None:
         opset_imports=[helper.make_opsetid("", OPSET)],
         producer_name="onnx-mlir-onnx-to-tflite-poc",
     )
+    # Pin the protobuf IR independently of the installed onnx package default.
+    # IR 11 supports this opset/model subset and is loadable by the test ORT.
+    model.ir_version = IR_VERSION
     onnx.checker.check_model(model)
     onnx.save(model, path)
     print(path)
