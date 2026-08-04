@@ -31,8 +31,13 @@
   must fold it into Conv constants or decompose it into channel Mul/Add, as it
   does for the tested opset-7 ResNet.
 - The bridge is coupled to both pinned MLIR revisions and to TensorFlow's TFL
-  exporter ODS/schema. Updating either repository requires rerunning parser,
-  FlatBuffer round-trip, interpreter-load, and numerical tests.
+  optimizer/exporter ODS/schema. Updating either repository requires rerunning
+  parser, optimization, FlatBuffer round-trip, interpreter-load, and numerical
+  tests.
 - The two-process design materializes constants in textual MLIR. For the tested
-  ResNet, each textual MLIR/round-trip file is about 167 MiB and preserved
-  intermediates total about 583 MiB, although the FlatBuffer is about 84 MiB.
+  ResNet, each textual MLIR/round-trip file is about 167 MiB; enabling
+  `--keep-intermediate-files` now retains both pre- and post-optimization TFL
+  IR, so preserved intermediates use additional disk. The FlatBuffer is about
+  84 MiB because weights dominate its size.
+- Optimization is float-only and structural. This prototype does not run
+  quantization, sparsification, or unsafe approximate algebraic rewrites.

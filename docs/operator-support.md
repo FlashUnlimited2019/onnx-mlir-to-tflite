@@ -11,11 +11,11 @@ only the configurations actually exercised by those models are claimed.
 | Sub | MVP | 18 | `tfl.sub` | numpy-style TFL broadcast | elementwise | sweep |
 | Mul | MVP | 7, 18 | `tfl.mul` | same channel-broadcast rule as Add | elementwise, conv/pool/reduce | sweep, ResNet |
 | Div | MVP | 18 | `tfl.div` | f32 only | elementwise | sweep |
-| Relu | MVP | 7, 18 | `tfl.relu` | none | relu, layout | add, MLP, ResNet |
+| Relu | MVP | 7, 18 | `tfl.relu`, then fused activation where legal | none | relu, layout | add, MLP, ResNet |
 | Sigmoid | MVP | 18 | `tfl.logistic` | none | elementwise | sweep |
 | Tanh | MVP | 18 | `tfl.tanh` | none | elementwise | sweep |
-| MatMul | MVP | 18 | `tfl.batch_matmul` | operand ranks 2-3; rank 4 rejected under the layout conversion | matmul | MLP |
-| Gemm | MVP | 7, 18 | batch matmul + mul/add | static f32; `transA/B`, alpha, beta mapped | gemm | sweep, ResNet |
+| MatMul | MVP | 18 | `tfl.batch_matmul`; constant rank-2 RHS optimized to `tfl.fully_connected` | operand ranks 2-3; rank 4 rejected under the layout conversion | matmul | MLP |
+| Gemm | MVP | 7, 18 | batch matmul + mul/add; optimized to fused fully connected when legal | static f32; `transA/B`, alpha, beta mapped | gemm | sweep, ResNet |
 | Reshape | MVP | 7, 18 | `tfl.reshape` | static result; `allowzero=0`; rank-4 crossing limited to `[N,C,1,1]`→non-rank-4 | reshape, diagnostics | reshape, ResNet |
 | Transpose | MVP | 18 | `tfl.transpose` | valid static permutation; rank 4 rejected | other_ops, diagnostics | reshape |
 | Concat | MVP | 18 | `tfl.concatenation` | valid static axis; rank-4 axis remapped | other_ops | sweep |
