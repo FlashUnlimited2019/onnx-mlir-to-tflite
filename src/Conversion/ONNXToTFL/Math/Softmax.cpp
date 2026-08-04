@@ -20,6 +20,11 @@ public:
             validateStaticF32Tensor(op, op->getResult(0).getType(), "result")))
       return failure();
     int64_t rank = cast<RankedTensorType>(input.getType()).getRank();
+    if (rank == 4) {
+      op.emitError("rank-4 Softmax is not supported with NCHW-to-NHWC layout "
+                   "conversion");
+      return failure();
+    }
     int64_t axis = -1;
     if (auto attr = op->getAttrOfType<IntegerAttr>("axis"))
       axis = attr.getValue().getSExtValue();
@@ -33,7 +38,9 @@ public:
     SmallVector<NamedAttribute> attributes{
         rewriter.getNamedAttr("beta", rewriter.getF32FloatAttr(1.0f))};
     Operation *newOp = createTFLOperation(rewriter, op.getLoc(), "tfl.softmax",
-        op->getResultTypes(), adaptor.getOperands(), attributes);
+        TypeRange{
+            this->getTypeConverter()->convertType(op->getResult(0).getType())},
+        adaptor.getOperands(), attributes);
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }

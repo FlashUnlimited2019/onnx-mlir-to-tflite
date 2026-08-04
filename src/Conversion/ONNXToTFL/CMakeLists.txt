@@ -6,7 +6,10 @@ add_onnx_mlir_library(OMONNXToTFL
 
   Math/Elementwise.cpp
   Math/MatMulGemm.cpp
+  Math/ReduceMean.cpp
   Math/Softmax.cpp
+  NN/Conv.cpp
+  NN/MaxPool.cpp
   Tensor/Concat.cpp
   Tensor/Constant.cpp
   Tensor/Reshape.cpp
@@ -16,5 +19,6 @@ add_onnx_mlir_library(OMONNXToTFL
   OMONNXOps
   MLIRArithDialect
   MLIRFuncDialect
+  MLIRFuncTransforms
   MLIRTransforms
   )

@@ -20,6 +20,11 @@ public:
             validateStaticF32Tensor(op, op->getResult(0).getType(), "result")))
       return failure();
     int64_t rank = cast<RankedTensorType>(data.getType()).getRank();
+    if (rank == 4) {
+      op.emitError("rank-4 Transpose is not supported with NCHW-to-NHWC "
+                   "layout conversion");
+      return failure();
+    }
     SmallVector<int64_t> permutation;
     if (auto perm = op->getAttrOfType<ArrayAttr>("perm")) {
       for (Attribute value : perm)
@@ -47,7 +52,10 @@ public:
 
     Value perm = createI32ShapeConstant(rewriter, op.getLoc(), permutation);
     Operation *newOp = createTFLOperation(rewriter, op.getLoc(),
-        "tfl.transpose", op->getResultTypes(), ValueRange{data, perm});
+        "tfl.transpose",
+        TypeRange{
+            this->getTypeConverter()->convertType(op->getResult(0).getType())},
+        ValueRange{data, perm});
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }

@@ -9,6 +9,36 @@ using namespace mlir;
 namespace onnx_mlir {
 namespace {
 
+FailureOr<Value> adaptRank3ChannelBroadcast(Operation *sourceOp,
+    unsigned operandIndex, Value convertedOperand, Type convertedResultType,
+    ConversionPatternRewriter &rewriter) {
+  auto sourceResultType =
+      dyn_cast<RankedTensorType>(sourceOp->getResult(0).getType());
+  auto sourceOperandType =
+      dyn_cast<RankedTensorType>(sourceOp->getOperand(operandIndex).getType());
+  auto resultType = dyn_cast<RankedTensorType>(convertedResultType);
+  if (!sourceResultType || sourceResultType.getRank() != 4 ||
+      !sourceOperandType || sourceOperandType.getRank() != 3)
+    return convertedOperand;
+
+  ArrayRef<int64_t> shape = sourceOperandType.getShape();
+  if (shape[1] != 1 || shape[2] != 1 || !resultType ||
+      resultType.getShape()[3] != shape[0]) {
+    sourceOp->emitError()
+        << "unsupported rank-3 to rank-4 broadcast under NHWC layout: operand "
+        << sourceOperandType << ", result " << sourceResultType;
+    return failure();
+  }
+
+  auto broadcastType = RankedTensorType::get(
+      {1, 1, shape[0]}, sourceOperandType.getElementType());
+  Value shapeValue = createI32ShapeConstant(
+      rewriter, sourceOp->getLoc(), broadcastType.getShape());
+  return createTFLOperation(rewriter, sourceOp->getLoc(), "tfl.reshape",
+      TypeRange{broadcastType}, ValueRange{convertedOperand, shapeValue})
+      ->getResult(0);
+}
+
 template <typename ONNXOp>
 class BinaryElementwiseLowering final : public OpConversionPattern<ONNXOp> {
 public:
@@ -27,9 +57,19 @@ public:
             validateStaticF32Tensor(op, op->getResult(0).getType(), "result")))
       return failure();
 
+    Type resultType =
+        this->getTypeConverter()->convertType(op->getResult(0).getType());
+    SmallVector<Value> operands(adaptor.getOperands());
+    for (unsigned i = 0; i < operands.size(); ++i) {
+      FailureOr<Value> adapted =
+          adaptRank3ChannelBroadcast(op, i, operands[i], resultType, rewriter);
+      if (failed(adapted))
+        return failure();
+      operands[i] = *adapted;
+    }
     SmallVector<NamedAttribute> attributes{getFusedActivationNone(rewriter)};
     Operation *newOp = createTFLOperation(rewriter, op.getLoc(), tflName,
-        op->getResultTypes(), adaptor.getOperands(), attributes);
+        TypeRange{resultType}, operands, attributes);
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }
@@ -54,8 +94,10 @@ public:
             validateStaticF32Tensor(op, op->getResult(0).getType(), "result")))
       return failure();
 
+    Type resultType =
+        this->getTypeConverter()->convertType(op->getResult(0).getType());
     Operation *newOp = createTFLOperation(rewriter, op.getLoc(), tflName,
-        op->getResultTypes(), adaptor.getOperands());
+        TypeRange{resultType}, adaptor.getOperands());
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }
@@ -95,7 +137,8 @@ public:
     SmallVector<NamedAttribute> attributes{
         rewriter.getNamedAttr("value", rewriter.getUnitAttr())};
     Operation *newOp = createTFLOperation(rewriter, op.getLoc(), "tfl.no_value",
-        op->getResultTypes(), {}, attributes);
+        TypeRange{this->getTypeConverter()->convertType(op.getType())}, {},
+        attributes);
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }

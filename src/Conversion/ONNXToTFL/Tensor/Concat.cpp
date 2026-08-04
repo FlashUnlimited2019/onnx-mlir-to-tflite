@@ -40,12 +40,17 @@ public:
       op.emitError() << "unsupported Concat axis " << rawAxis;
       return failure();
     }
+    if (rank == 4)
+      axis = mapNCHWAxisToNHWC(axis);
 
     SmallVector<NamedAttribute> attributes{
         rewriter.getNamedAttr("axis", rewriter.getI32IntegerAttr(axis)),
         getFusedActivationNone(rewriter)};
     Operation *newOp = createTFLOperation(rewriter, op.getLoc(),
-        "tfl.concatenation", op->getResultTypes(), inputs, attributes);
+        "tfl.concatenation",
+        TypeRange{
+            this->getTypeConverter()->convertType(op->getResult(0).getType())},
+        inputs, attributes);
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }

@@ -30,7 +30,18 @@ public:
 
     // The inferred static result shape is authoritative. Materializing it
     // avoids ONNX's zero/-1 shape encoding leaking into TFL Reshape semantics.
-    auto resultType = cast<RankedTensorType>(op->getResult(0).getType());
+    auto sourceDataType = cast<RankedTensorType>(op->getOperand(0).getType());
+    auto sourceResultType = cast<RankedTensorType>(op->getResult(0).getType());
+    if ((sourceDataType.getRank() == 4 || sourceResultType.getRank() == 4) &&
+        !(sourceDataType.getRank() == 4 && sourceDataType.getShape()[2] == 1 &&
+            sourceDataType.getShape()[3] == 1 &&
+            sourceResultType.getRank() != 4)) {
+      op.emitError("unsupported Reshape involving rank-4 layout conversion; "
+                   "only NCHW [N,C,1,1] to non-rank-4 is supported");
+      return failure();
+    }
+    auto resultType = cast<RankedTensorType>(
+        this->getTypeConverter()->convertType(sourceResultType));
     if (llvm::any_of(resultType.getShape(), [](int64_t dimension) {
           return dimension > std::numeric_limits<int32_t>::max();
         })) {
