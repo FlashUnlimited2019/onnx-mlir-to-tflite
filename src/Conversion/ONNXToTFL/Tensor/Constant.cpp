@@ -36,8 +36,8 @@ public:
       return failure();
     }
 
-    Type resultType = op->getResult(0).getType();
-    auto tensorType = dyn_cast<RankedTensorType>(resultType);
+    Type sourceResultType = op->getResult(0).getType();
+    auto tensorType = dyn_cast<RankedTensorType>(sourceResultType);
     if (!tensorType || !tensorType.hasStaticShape()) {
       op.emitError(
           "dynamic tensor shape is not supported by ONNXToTFL MVP (Constant)");
@@ -48,6 +48,20 @@ public:
         !elementType.isSignlessInteger(64)) {
       op.emitError() << "unsupported Constant element type: " << elementType;
       return failure();
+    }
+
+    Type resultType = this->getTypeConverter()->convertType(sourceResultType);
+    // Transpose by semantic layout, not by type inequality: OIHW [O,3,3,3]
+    // and OHWI [O,3,3,3] have identical shapes but different element order.
+    if (tensorType.getRank() == 4 && elementType.isF32()) {
+      FailureOr<DenseElementsAttr> transposed =
+          transposeRank4NCHWToNHWC(cast<DenseElementsAttr>(constantValue));
+      if (failed(transposed)) {
+        op.emitError("failed to transpose rank-4 Constant from NCHW/OIHW to "
+                     "NHWC/OHWI");
+        return failure();
+      }
+      constantValue = *transposed;
     }
 
     rewriter.replaceOpWithNewOp<arith::ConstantOp>(

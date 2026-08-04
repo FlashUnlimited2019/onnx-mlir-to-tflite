@@ -40,9 +40,18 @@ public:
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(ONNXMatMulOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (llvm::any_of(op->getOperandTypes(), [](Type type) {
+          auto ranked = dyn_cast<RankedTensorType>(type);
+          return ranked && ranked.getRank() == 4;
+        })) {
+      op.emitError("rank-4 MatMul is not supported with NCHW-to-NHWC layout "
+                   "conversion");
+      return failure();
+    }
+    Type resultType =
+        this->getTypeConverter()->convertType(op->getResult(0).getType());
     FailureOr<Value> result = createBatchMatMul(op, adaptor.getOperands()[0],
-        adaptor.getOperands()[1], op->getResult(0).getType(), false, false,
-        rewriter);
+        adaptor.getOperands()[1], resultType, false, false, rewriter);
     if (failed(result))
       return failure();
     rewriter.replaceOp(op, *result);
@@ -85,7 +94,8 @@ public:
     bool transB = getBoolIntegerAttributeOr(op, "transB", false);
     float alpha = getFloatAttributeOr(op, "alpha", 1.0f);
     float beta = getFloatAttributeOr(op, "beta", 1.0f);
-    Type resultType = op->getResult(0).getType();
+    Type resultType =
+        this->getTypeConverter()->convertType(op->getResult(0).getType());
 
     FailureOr<Value> matmul = createBatchMatMul(
         op, operands[0], operands[1], resultType, transA, transB, rewriter);

@@ -42,6 +42,12 @@ void populateLoweringONNXMatMulGemmOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);
 void populateLoweringONNXSoftmaxOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);
+void populateLoweringONNXConvOpToTFLPatterns(
+    mlir::RewritePatternSet &, mlir::TypeConverter &);
+void populateLoweringONNXMaxPoolOpToTFLPatterns(
+    mlir::RewritePatternSet &, mlir::TypeConverter &);
+void populateLoweringONNXReduceMeanOpToTFLPatterns(
+    mlir::RewritePatternSet &, mlir::TypeConverter &);
 void populateLoweringONNXConcatOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);
 void populateLoweringONNXConstantOpToTFLPatterns(

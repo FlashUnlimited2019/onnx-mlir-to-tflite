@@ -6,7 +6,9 @@
 
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
+#include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/IR/Verifier.h"
+#include "llvm/ADT/DenseSet.h"
 
 using namespace mlir;
 
@@ -17,7 +19,8 @@ bool isSupportedONNXOperation(Operation *op) {
   return isa<ONNXEntryPointOp, ONNXReturnOp, ONNXNoneOp, ONNXConstantOp,
       ONNXIdentityOp, ONNXAddOp, ONNXSubOp, ONNXMulOp, ONNXDivOp, ONNXReluOp,
       ONNXSigmoidOp, ONNXTanhOp, ONNXMatMulOp, ONNXGemmOp, ONNXReshapeOp,
-      ONNXTransposeOp, ONNXConcatOp, ONNXSoftmaxOp>(op);
+      ONNXTransposeOp, ONNXConcatOp, ONNXSoftmaxOp, ONNXConvOp,
+      ONNXMaxPoolSingleOutOp, ONNXReduceMeanV13Op>(op);
 }
 
 StringRef getONNXValueName(func::FuncOp function, unsigned index, bool result) {
@@ -44,7 +47,7 @@ std::string joinValueNames(func::FuncOp function, bool result) {
   return joined;
 }
 
-LogicalResult prepareEntryPoint(ModuleOp module) {
+LogicalResult prepareEntryPoint(ModuleOp module, TypeConverter &typeConverter) {
   SmallVector<ONNXEntryPointOp> entryPoints;
   module.walk([&](ONNXEntryPointOp op) { entryPoints.push_back(op); });
   if (entryPoints.size() != 1) {
@@ -81,6 +84,19 @@ LogicalResult prepareEntryPoint(ModuleOp module) {
   }
 
   Builder builder(module.getContext());
+  SmallVector<Type> convertedInputs;
+  SmallVector<Type> convertedResults;
+  convertedInputs.reserve(function.getNumArguments());
+  convertedResults.reserve(function.getNumResults());
+  for (auto [index, type] : llvm::enumerate(function.getArgumentTypes())) {
+    Type converted = typeConverter.convertType(type);
+    convertedInputs.push_back(converted);
+    function.getArgument(index).setType(converted);
+  }
+  for (Type type : function.getResultTypes())
+    convertedResults.push_back(typeConverter.convertType(type));
+  function.setType(builder.getFunctionType(convertedInputs, convertedResults));
+
   SmallVector<NamedAttribute> entryAttributes{
       builder.getNamedAttr(
           "inputs", builder.getStringAttr(joinValueNames(function, false))),
@@ -111,7 +127,25 @@ public:
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
-    if (failed(prepareEntryPoint(module))) {
+    llvm::DenseSet<Type> targetRank4Types;
+    module.walk([&](Operation *op) {
+      for (Type type :
+          llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes())) {
+        Type converted = convertRank4NCHWToNHWCType(type);
+        if (converted != type)
+          targetRank4Types.insert(converted);
+      }
+    });
+
+    TypeConverter typeConverter;
+    typeConverter.addConversion([](Type type) { return type; });
+    typeConverter.addConversion([&](RankedTensorType type) -> Type {
+      if (targetRank4Types.contains(type))
+        return type;
+      return convertRank4NCHWToNHWCType(type);
+    });
+
+    if (failed(prepareEntryPoint(module, typeConverter))) {
       signalPassFailure();
       return;
     }
@@ -132,9 +166,10 @@ public:
     }
 
     MLIRContext *context = &getContext();
-    TypeConverter typeConverter;
-    typeConverter.addConversion([](Type type) { return type; });
     RewritePatternSet patterns(context);
+    populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(
+        patterns, typeConverter);
+    populateReturnOpTypeConversionPattern(patterns, typeConverter);
     populateLoweringONNXElementwiseOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXMatMulGemmOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXSoftmaxOpToTFLPatterns(patterns, typeConverter);
@@ -142,10 +177,18 @@ public:
     populateLoweringONNXConstantOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXReshapeOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXTransposeOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXConvOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXMaxPoolOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXReduceMeanOpToTFLPatterns(patterns, typeConverter);
 
     ConversionTarget target(*context);
     target.addLegalDialect<BuiltinDialect, TFLCompatibilityDialect,
-        arith::ArithDialect, func::FuncDialect>();
+        arith::ArithDialect>();
+    target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp op) {
+      return typeConverter.isSignatureLegal(op.getFunctionType());
+    });
+    target.addDynamicallyLegalOp<func::ReturnOp>(
+        [&](func::ReturnOp op) { return typeConverter.isLegal(op); });
     target.addIllegalDialect<ONNXDialect>();
     if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
       signalPassFailure();

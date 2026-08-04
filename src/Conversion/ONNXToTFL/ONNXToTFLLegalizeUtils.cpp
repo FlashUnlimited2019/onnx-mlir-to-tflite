@@ -8,6 +8,8 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 
+#include <cstring>
+
 using namespace mlir;
 
 namespace onnx_mlir {
@@ -65,6 +67,65 @@ Value createF32ScalarTensorConstant(
   auto type = RankedTensorType::get({}, rewriter.getF32Type());
   auto attr = DenseFPElementsAttr::get(type, ArrayRef<float>{value});
   return arith::ConstantOp::create(rewriter, loc, type, attr);
+}
+
+Type convertRank4NCHWToNHWCType(Type type) {
+  auto ranked = dyn_cast<RankedTensorType>(type);
+  if (!ranked || ranked.getRank() != 4 || !ranked.getElementType().isF32())
+    return type;
+  ArrayRef<int64_t> shape = ranked.getShape();
+  return RankedTensorType::get(
+      {shape[0], shape[2], shape[3], shape[1]}, ranked.getElementType());
+}
+
+FailureOr<DenseElementsAttr> transposeRank4NCHWToNHWC(DenseElementsAttr input) {
+  auto oldType = dyn_cast<RankedTensorType>(input.getType());
+  if (!oldType || oldType.getRank() != 4)
+    return failure();
+  auto newType = cast<RankedTensorType>(convertRank4NCHWToNHWCType(oldType));
+  if (input.isSplat())
+    return input.reshape(newType);
+
+  ArrayRef<char> rawData = input.getRawData();
+  if (!rawData.data() || oldType.getElementTypeBitWidth() % 8 != 0)
+    return failure();
+
+  // This is the standard row-major dense-attribute transpose algorithm used
+  // by MLIR's TOSA transpose reduction. Permutation [0, 2, 3, 1] maps NCHW
+  // activations to NHWC and OIHW Conv filters to OHWI.
+  constexpr int64_t permutation[] = {0, 2, 3, 1};
+  ArrayRef<int64_t> oldShape = oldType.getShape();
+  ArrayRef<int64_t> newShape = newType.getShape();
+  auto calculateStrides = [](ArrayRef<int64_t> shape) {
+    SmallVector<int64_t> strides(shape.size());
+    strides.back() = 1;
+    for (int64_t i = static_cast<int64_t>(shape.size()) - 2; i >= 0; --i)
+      strides[i] = strides[i + 1] * shape[i + 1];
+    return strides;
+  };
+  SmallVector<int64_t> inputStrides = calculateStrides(oldShape);
+  SmallVector<int64_t> outputStrides = calculateStrides(newShape);
+  size_t elementSize = oldType.getElementTypeBitWidth() / 8;
+  int64_t numElements = oldType.getNumElements();
+  SmallVector<char> outputBuffer(numElements * elementSize);
+
+  for (int64_t destination = 0; destination < numElements; ++destination) {
+    int64_t remaining = destination;
+    int64_t source = 0;
+    for (int64_t dimension = 0; dimension < 4; ++dimension) {
+      int64_t coordinate = remaining / outputStrides[dimension];
+      remaining %= outputStrides[dimension];
+      source += coordinate * inputStrides[permutation[dimension]];
+    }
+    std::memcpy(outputBuffer.data() + destination * elementSize,
+        rawData.data() + source * elementSize, elementSize);
+  }
+  return DenseElementsAttr::getFromRawBuffer(newType, outputBuffer);
+}
+
+int64_t mapNCHWAxisToNHWC(int64_t axis) {
+  constexpr int64_t mapping[] = {0, 3, 1, 2};
+  return axis >= 0 && axis < 4 ? mapping[axis] : axis;
 }
 
 int64_t normalizeAxis(int64_t axis, int64_t rank) {
