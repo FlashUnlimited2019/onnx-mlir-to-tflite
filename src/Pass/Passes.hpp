@@ -160,6 +160,9 @@ std::unique_ptr<mlir::Pass> createConvertKrnlToLLVMPass(bool verifyInputTensors,
 /// Pass for lowering Onnx ops to TOSA dialect
 std::unique_ptr<mlir::Pass> createConvertONNXToTOSAPass();
 
+/// Pass for lowering ONNX ops to TensorFlow Lite dialect operations.
+std::unique_ptr<mlir::Pass> createConvertONNXToTFLPass();
+
 /// Pass for lowering Onnx ops to Linalg dialect
 std::unique_ptr<mlir::Pass> createConvertONNXToLinalg();
 std::unique_ptr<mlir::Pass> createConvertONNXToLinalg(
