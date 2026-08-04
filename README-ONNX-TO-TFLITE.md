@@ -38,6 +38,25 @@ python test/e2e/run_compare.py \
     --tflite /tmp/mlp.tflite
 ```
 
+The supplied ResNet uses an NCHW ONNX input and an NHWC TFLite input:
+
+```bash
+./build/bin/onnx-to-tflite \
+    ../models/resnet34-v2-7-224.onnx \
+    -o /tmp/resnet34.tflite
+
+python test/e2e/run_similarity.py \
+    --onnx ../models/resnet34-v2-7-224.onnx \
+    --tflite /tmp/resnet34.tflite \
+    --seed 20260804
+```
+
+The same conversion and comparison are packaged as:
+
+```bash
+./scripts/test_resnet34.sh
+```
+
 If `flatbuffer_translate` is not at the bootstrapped sibling TensorFlow path,
 pass it explicitly or set `FLATBUFFER_TRANSLATE`:
 
@@ -80,21 +99,32 @@ validated Identity, Sub/Mul/Div, Sigmoid/Tanh, Gemm alpha/beta, and Concat
 through the same end-to-end path. The generated fixtures pin opset 18, ONNX IR
 11, and seed 20260804.
 
-The filtered MLIR suite has nine passing files, including rank-3/rank-5 layout
-preservation checks. The supplied ResNet imports
-successfully but intentionally stops at its first `onnx.Conv`; no ResNet
-FlatBuffer or numerical result is claimed.
+The filtered MLIR suite has ten passing files, including Conv/MaxPool/reduction,
+rank-4 NHWC conversion, and rank-3/rank-5 preservation checks. The supplied
+opset-7 ResNet-34 was exported to a 87,206,508-byte `TFL3` FlatBuffer, round-trip
+parsed by TensorFlow, loaded and invoked by `tf.lite.Interpreter`, and compared
+against ONNX Runtime using seed 20260804. The measured output metrics were:
+
+```text
+cosine similarity:           0.999999999999631
+Euclidean distance:          4.329507154530033e-05
+relative Euclidean distance: 8.641212474141771e-07
+RMSE:                        1.369110375430949e-06
+max absolute error:          5.72204589844e-06
+```
+
+`simple_conv.onnx` also passed the layout-aware comparison, including the
+OIHW→OHWI case where source and destination shapes are numerically identical.
 
 ## Scope
 
-The first stage supports static, ranked FP32 graphs containing Constant,
+The prototype supports static, ranked FP32 graphs containing Constant,
 Identity, Add/Sub/Mul/Div, Relu/Sigmoid/Tanh, MatMul, constrained Gemm, Reshape,
-Transpose, Concat, and last-axis Softmax. Runtime inputs and outputs are FP32;
-i32/i64 constants are permitted for shape operations.
+Transpose, Concat, last-axis Softmax, constrained Conv/MaxPool, and the spatial
+ReduceMean form produced for GlobalAveragePool. Runtime inputs and outputs are
+FP32; i32/i64 constants are permitted for shape operations.
 
-Exactly rank-4 activations use NHWC when layout-sensitive lowering is added.
-All other activation ranks retain ONNX order, explicitly including rank 3 and
-rank 5. Conv and Pool lowering is not yet implemented, so the supplied ResNet
-and `simple_conv.onnx` currently serve as honest unsupported-op diagnostics.
+Exactly rank-4 TFLite activations and graph boundaries use NHWC. All other
+activation ranks retain ONNX order, explicitly including rank 3 and rank 5.
 See `docs/operator-support.md`, `docs/layout.md`, and
 `docs/known-limitations.md`.
