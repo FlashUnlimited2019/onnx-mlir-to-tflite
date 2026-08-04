@@ -1,14 +1,14 @@
 // RUN: not onnx-mlir-opt --convert-onnx-to-tfl %s -split-input-file 2>&1 | FileCheck %s
 
 module {
-  func.func @main_graph(%arg0: tensor<1x3x8x8xf32>, %arg1: tensor<4x3x3x3xf32>) -> tensor<1x4x6x6xf32> {
+  func.func @main_graph(%arg0: tensor<1x4x8x8xf32>, %arg1: tensor<4x2x3x3xf32>) -> tensor<1x4x6x6xf32> {
     %none = "onnx.NoValue"() {value} : () -> none
-    %0 = "onnx.Conv"(%arg0, %arg1, %none) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [3, 3], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<4x3x3x3xf32>, none) -> tensor<1x4x6x6xf32>
+    %0 = "onnx.Conv"(%arg0, %arg1, %none) {auto_pad = "NOTSET", dilations = [1, 1], group = 2 : si64, kernel_shape = [3, 3], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x4x8x8xf32>, tensor<4x2x3x3xf32>, none) -> tensor<1x4x6x6xf32>
     return %0 : tensor<1x4x6x6xf32>
   }
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
-// CHECK: unsupported ONNX operation: onnx.Conv
+// CHECK: unsupported Conv configuration: group=2 (only group=1 is supported)
 
 // -----
 
