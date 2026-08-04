@@ -95,7 +95,8 @@ run cmake -E chdir "${TENSORFLOW_ROOT}" "${BAZEL_ENV[@]}" \
   "${BAZEL_BIN}" "${BAZEL_STARTUP_ARGS[@]}" \
   --output_base="${WORKSPACE_ROOT}/.bazel-output" build \
   --jobs="${BUILD_JOBS:-24}" --local_resources=memory=65536 --config=opt \
-  //tensorflow/compiler/mlir/lite:flatbuffer_translate
+  //tensorflow/compiler/mlir/lite:flatbuffer_translate \
+  //tensorflow/compiler/mlir/lite:litert-opt
 
 run cmake -G Ninja -S "${REPO_ROOT}" -B "${BUILD_ROOT}" \
   -DMLIR_DIR="${LLVM_ROOT}/build/lib/cmake/mlir" \
@@ -114,11 +115,22 @@ fi
 run "${PYTHON_BIN}" "${REPO_ROOT}/utils/generate_test_models.py"
 run "${TENSORFLOW_ROOT}/bazel-bin/tensorflow/compiler/mlir/lite/flatbuffer_translate" \
   --help
+run "${TENSORFLOW_ROOT}/bazel-bin/tensorflow/compiler/mlir/lite/litert-opt" \
+  --help
 run "${BUILD_ROOT}/bin/onnx-to-tflite" \
   "${REPO_ROOT}/test/models/mlp.onnx" \
   -o "${BUILD_ROOT}/test/models/mlp.tflite" \
   --flatbuffer-translate \
-  "${TENSORFLOW_ROOT}/bazel-bin/tensorflow/compiler/mlir/lite/flatbuffer_translate"
+  "${TENSORFLOW_ROOT}/bazel-bin/tensorflow/compiler/mlir/lite/flatbuffer_translate" \
+  --litert-opt \
+  "${TENSORFLOW_ROOT}/bazel-bin/tensorflow/compiler/mlir/lite/litert-opt"
+run env TF_CPP_MIN_LOG_LEVEL=3 "${PYTHON_BIN}" \
+  "${REPO_ROOT}/utils/inspect_tflite.py" \
+  "${BUILD_ROOT}/test/models/mlp.tflite" \
+  --max-operators 3 \
+  --forbid-op BATCH_MATMUL \
+  --forbid-op ADD \
+  --forbid-op RELU
 run "${PYTHON_BIN}" "${REPO_ROOT}/test/e2e/run_compare.py" \
   --onnx "${REPO_ROOT}/test/models/mlp.onnx" \
   --tflite "${BUILD_ROOT}/test/models/mlp.tflite"

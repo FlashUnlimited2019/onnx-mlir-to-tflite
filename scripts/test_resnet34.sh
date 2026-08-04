@@ -19,6 +19,13 @@ fi
 
 mkdir -p "$(dirname "${OUTPUT}")"
 "${REPO_ROOT}/build/bin/onnx-to-tflite" "${MODEL}" -o "${OUTPUT}"
+TF_CPP_MIN_LOG_LEVEL=3 python "${REPO_ROOT}/utils/inspect_tflite.py" \
+  "${OUTPUT}" \
+  --max-operators 96 \
+  --max-constant-tensors 99 \
+  --forbid-op RESHAPE \
+  --forbid-op RELU \
+  --forbid-op BATCH_MATMUL
 TF_CPP_MIN_LOG_LEVEL=3 python "${REPO_ROOT}/test/e2e/run_similarity.py" \
   --onnx "${MODEL}" \
   --tflite "${OUTPUT}" \
