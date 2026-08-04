@@ -47,7 +47,9 @@ def mlp(output_dir: Path, rng: np.random.Generator) -> None:
         "w2": rng.normal(0.0, 0.25, [5, 3]).astype(np.float32),
         "b2": rng.normal(0.0, 0.1, [3]).astype(np.float32),
     }
-    initializers = [numpy_helper.from_array(value, name) for name, value in arrays.items()]
+    initializers = [
+        numpy_helper.from_array(value, name) for name, value in arrays.items()
+    ]
     nodes = [
         helper.make_node("MatMul", ["input", "w1"], ["hidden_mm"], name="matmul_1"),
         helper.make_node("Add", ["hidden_mm", "b1"], ["hidden_bias"], name="bias_1"),
@@ -70,6 +72,72 @@ def reshape_transpose(output_dir: Path) -> None:
     save(
         helper.make_graph(nodes, "reshape_transpose", [x], [y], [shape]),
         output_dir / "reshape_transpose.onnx",
+    )
+
+
+def operator_sweep(output_dir: Path, rng: np.random.Generator) -> None:
+    x = helper.make_tensor_value_info("input", TensorProto.FLOAT, [2, 4])
+    concat_out = helper.make_tensor_value_info(
+        "concat_output", TensorProto.FLOAT, [2, 8]
+    )
+    gemm_transb_out = helper.make_tensor_value_info(
+        "gemm_transb_output", TensorProto.FLOAT, [2, 3]
+    )
+    gemm_transa_out = helper.make_tensor_value_info(
+        "gemm_transa_output", TensorProto.FLOAT, [4, 3]
+    )
+    arrays = {
+        "bias4": np.array([0.2, -0.1, 0.3, -0.4], dtype=np.float32),
+        "scale4": np.array([1.5, -0.5, 2.0, 0.25], dtype=np.float32),
+        "divisor4": np.array([0.75, 1.25, -2.0, 0.5], dtype=np.float32),
+        "gemm_weight_b": rng.normal(0.0, 0.2, [3, 4]).astype(np.float32),
+        "gemm_bias_b": rng.normal(0.0, 0.1, [3]).astype(np.float32),
+        "gemm_weight_a": rng.normal(0.0, 0.2, [2, 3]).astype(np.float32),
+        "gemm_bias_a": rng.normal(0.0, 0.1, [3]).astype(np.float32),
+    }
+    initializers = [
+        numpy_helper.from_array(value, name) for name, value in arrays.items()
+    ]
+    nodes = [
+        helper.make_node("Identity", ["input"], ["identity"], name="identity"),
+        helper.make_node("Sub", ["identity", "bias4"], ["sub"], name="sub"),
+        helper.make_node("Mul", ["sub", "scale4"], ["mul"], name="mul"),
+        helper.make_node("Div", ["mul", "divisor4"], ["div"], name="div"),
+        helper.make_node("Sigmoid", ["div"], ["sigmoid"], name="sigmoid"),
+        helper.make_node("Tanh", ["sigmoid"], ["tanh"], name="tanh"),
+        helper.make_node(
+            "Concat",
+            ["tanh", "tanh"],
+            ["concat_output"],
+            name="concat",
+            axis=1,
+        ),
+        helper.make_node(
+            "Gemm",
+            ["input", "gemm_weight_b", "gemm_bias_b"],
+            ["gemm_transb_output"],
+            name="gemm_transb",
+            alpha=0.5,
+            beta=2.0,
+            transB=1,
+        ),
+        helper.make_node(
+            "Gemm",
+            ["input", "gemm_weight_a", "gemm_bias_a"],
+            ["gemm_transa_output"],
+            name="gemm_transa",
+            transA=1,
+        ),
+    ]
+    save(
+        helper.make_graph(
+            nodes,
+            "operator_sweep",
+            [x],
+            [concat_out, gemm_transb_out, gemm_transa_out],
+            initializers,
+        ),
+        output_dir / "operator_sweep.onnx",
     )
 
 
@@ -96,6 +164,7 @@ def main() -> None:
     add_relu(output_dir)
     mlp(output_dir, rng)
     reshape_transpose(output_dir)
+    operator_sweep(output_dir, rng)
     simple_conv(output_dir, rng)
 
 
