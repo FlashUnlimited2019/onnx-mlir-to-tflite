@@ -24,16 +24,23 @@ def _find_tool(name: str, explicit: str | None, script: Path) -> Path:
         return Path(from_path).resolve()
 
     bin_dir = script.resolve().parent
-    workspace = bin_dir.parents[3] if len(bin_dir.parents) > 3 else None
     candidates = [bin_dir / name]
-    if workspace:
-        candidates.extend(
-            [
-                workspace / "tensorflow" / "bazel-bin" / "tensorflow" / "compiler"
-                / "mlir" / "lite" / "flatbuffer_translate",
-                workspace / "build" / "tensorflow" / "flatbuffer_translate",
-            ]
-        )
+    tensorflow_tool = {
+        "flatbuffer_translate": "flatbuffer_translate",
+        "litert-opt": "litert-opt",
+    }.get(name)
+    if tensorflow_tool:
+        # Support both the source-tree script and its CMake build-tree copy.
+        # Looking through ancestors avoids depending on a particular CMake
+        # configuration directory (Release/bin versus bin symlinks).
+        for ancestor in (bin_dir, *bin_dir.parents):
+            candidates.extend(
+                [
+                    ancestor / "tensorflow" / "bazel-bin" / "tensorflow"
+                    / "compiler" / "mlir" / "lite" / tensorflow_tool,
+                    ancestor / "build" / "tensorflow" / tensorflow_tool,
+                ]
+            )
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()
@@ -61,6 +68,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--onnx-mlir-opt", help="path to onnx-mlir-opt")
     parser.add_argument(
         "--flatbuffer-translate", help="path to TensorFlow flatbuffer_translate")
+    parser.add_argument(
+        "--litert-opt", help="path to TensorFlow litert-opt")
+    parser.add_argument(
+        "--optimize-tfl",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="run TensorFlow TFL canonicalization/fusion before export",
+    )
     parser.add_argument("--dump-onnx-mlir", action="store_true")
     parser.add_argument("--dump-tfl-mlir", action="store_true")
     parser.add_argument("--keep-intermediate-files", action="store_true")
@@ -90,6 +105,13 @@ def main() -> int:
             args.flatbuffer_translate or os.environ.get("FLATBUFFER_TRANSLATE"),
             script,
         )
+        litert_opt = None
+        if args.optimize_tfl:
+            litert_opt = _find_tool(
+                "litert-opt",
+                args.litert_opt or os.environ.get("LITERT_OPT"),
+                script,
+            )
     except FileNotFoundError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -108,6 +130,7 @@ def main() -> int:
     try:
         onnx_prefix = work_dir / "model"
         onnx_mlir_path = work_dir / "model.onnx.mlir"
+        unoptimized_tfl_mlir_path = work_dir / "model.unoptimized.tfl.mlir"
         tfl_mlir_path = work_dir / "model.tfl.mlir"
         flatbuffer_path = work_dir / "model.tflite"
         verified_mlir_path = work_dir / "verified-roundtrip.mlir"
@@ -125,6 +148,9 @@ def main() -> int:
             ],
             "ONNX import",
         )
+        conversion_output = (
+            unoptimized_tfl_mlir_path if args.optimize_tfl else tfl_mlir_path
+        )
         opt_command = [
             str(onnx_mlir_opt),
             str(onnx_mlir_path),
@@ -132,11 +158,31 @@ def main() -> int:
             "--convert-onnx-to-tfl",
             "--canonicalize",
             "-o",
-            str(tfl_mlir_path),
+            str(conversion_output),
         ]
         if args.verify_each:
             opt_command.append("--verify-each=true")
         _run(opt_command, "ONNX to TFL dialect conversion")
+        if args.optimize_tfl:
+            assert litert_opt is not None
+            tfl_opt_command = [
+                str(litert_opt),
+                str(unoptimized_tfl_mlir_path),
+                # Our ONNX lowering intentionally emits BatchMatMul for
+                # MatMul/Gemm. TensorFlow's own pass turns safe rank-2
+                # constant-RHS cases into FullyConnected before the general
+                # optimizer fuses bias and activation operands.
+                "--tfl-optimize-batch-matmul",
+                "--tfl-optimize",
+                "--canonicalize",
+                "--cse",
+                "--symbol-dce",
+                "-o",
+                str(tfl_mlir_path),
+            ]
+            if args.verify_each:
+                tfl_opt_command.append("--verify-each=true")
+            _run(tfl_opt_command, "TFL dialect optimization")
         _run(
             [
                 str(flatbuffer_translate),
