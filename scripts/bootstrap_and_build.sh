@@ -10,6 +10,7 @@ readonly BAZEL_VERSION=7.7.0
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly DEPS_ROOT="${REPO_ROOT}/.deps"
+readonly CMAKE_DEPS_ROOT="${DEPS_ROOT}/cmake"
 readonly NINJA_BIN="${DEPS_ROOT}/bin/ninja"
 readonly BAZEL_BIN="${DEPS_ROOT}/bin/bazel"
 readonly LLVM_ROOT="${LLVM_ROOT:-${REPO_ROOT}/llvm-project}"
@@ -49,7 +50,7 @@ for tool in git cmake curl c++; do
   fi
 done
 
-run mkdir -p "${DEPS_ROOT}"
+run mkdir -p "${DEPS_ROOT}" "${CMAKE_DEPS_ROOT}"
 if [[ ! -x "${NINJA_BIN}" ]]; then
   run "${PYTHON_BIN}" -m pip install --prefix "${DEPS_ROOT}" ninja==1.13.0
 fi
@@ -99,7 +100,17 @@ run cmake -E chdir "${TENSORFLOW_ROOT}" "${BAZEL_ENV[@]}" \
   //tensorflow/compiler/mlir/lite:flatbuffer_translate \
   //tensorflow/compiler/mlir/lite:litert-opt
 
-run cmake -G Ninja -S "${REPO_ROOT}" -B "${BUILD_ROOT}" \
+# Discard migrated FetchContent source overrides so an existing CMake cache
+# cannot keep referring to dependency trees from another checkout or server.
+run cmake \
+  -U FETCHCONTENT_SOURCE_DIR_ABSL \
+  -U FETCHCONTENT_SOURCE_DIR_PROTOBUF \
+  -U absl_SOURCE_DIR \
+  -U protobuf_SOURCE_DIR \
+  -U utf8_range_SOURCE_DIR \
+  -G Ninja -S "${REPO_ROOT}" -B "${BUILD_ROOT}" \
+  -DFETCHCONTENT_BASE_DIR="${CMAKE_DEPS_ROOT}" \
+  -DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
   -DMLIR_DIR="${LLVM_ROOT}/build/lib/cmake/mlir" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_MAKE_PROGRAM="${NINJA_BIN}" \

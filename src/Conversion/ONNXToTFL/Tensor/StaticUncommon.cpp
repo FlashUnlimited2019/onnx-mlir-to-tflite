@@ -283,7 +283,7 @@ public:
     if (thetaType.getRank() != 3 || thetaType.getShape()[0] != batch ||
         thetaType.getShape()[1] != spatialRank ||
         thetaType.getShape()[2] != spatialRank + 1 ||
-        theta->size() != thetaType.getNumElements())
+        theta->size() != static_cast<size_t>(thetaType.getNumElements()))
       return op.emitError("AffineGrid theta shape is inconsistent"), failure();
     SmallVector<int64_t> expectedShape{batch};
     expectedShape.append(size->begin() + 2, size->end());
