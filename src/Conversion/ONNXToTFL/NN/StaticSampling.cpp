@@ -49,8 +49,7 @@ Value staticWeightedGather(ConversionPatternRewriter &rewriter, Location loc,
     Value input, ArrayRef<int32_t> coordinates, int64_t coordinateRank,
     ArrayRef<float> coefficients, int64_t outputElements,
     int64_t termsPerOutput, RankedTensorType resultType,
-    bool reduceMaximum = false,
-    ArrayRef<float> bias = {}) {
+    bool reduceMaximum = false, ArrayRef<float> bias = {}) {
   int64_t terms = coefficients.size();
   auto coordinateType =
       RankedTensorType::get({terms, coordinateRank}, rewriter.getI32Type());
@@ -68,8 +67,8 @@ Value staticWeightedGather(ConversionPatternRewriter &rewriter, Location loc,
                        ->getResult(0);
   auto matrixType = RankedTensorType::get(
       {outputElements, termsPerOutput}, rewriter.getF32Type());
-  Value matrixShape = createI32ShapeConstant(
-      rewriter, loc, {outputElements, termsPerOutput});
+  Value matrixShape =
+      createI32ShapeConstant(rewriter, loc, {outputElements, termsPerOutput});
   Value matrix = createTFLOperation(rewriter, loc, "tfl.reshape",
       TypeRange{matrixType}, ValueRange{weighted, matrixShape})
                      ->getResult(0);
@@ -79,26 +78,24 @@ Value staticWeightedGather(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<NamedAttribute> reductionAttributes{
       rewriter.getNamedAttr("keep_dims", rewriter.getBoolAttr(false))};
   Value result = createTFLOperation(rewriter, loc,
-      reduceMaximum ? "tfl.reduce_max" : "tfl.sum",
-      TypeRange{vectorType}, ValueRange{matrix, reductionAxis},
-      reductionAttributes)
+      reduceMaximum ? "tfl.reduce_max" : "tfl.sum", TypeRange{vectorType},
+      ValueRange{matrix, reductionAxis}, reductionAttributes)
                      ->getResult(0);
   if (!bias.empty()) {
-    Value biasValue = arith::ConstantOp::create(rewriter, loc, vectorType,
-        DenseFPElementsAttr::get(vectorType, bias));
-    result = createTFLOperation(rewriter, loc, "tfl.add",
-        TypeRange{vectorType}, ValueRange{result, biasValue}, fusedNone)
+    Value biasValue = arith::ConstantOp::create(
+        rewriter, loc, vectorType, DenseFPElementsAttr::get(vectorType, bias));
+    result = createTFLOperation(rewriter, loc, "tfl.add", TypeRange{vectorType},
+        ValueRange{result, biasValue}, fusedNone)
                  ->getResult(0);
   }
   Value resultShape =
       createI32ShapeConstant(rewriter, loc, resultType.getShape());
-  return createTFLOperation(rewriter, loc, "tfl.reshape",
-      TypeRange{resultType}, ValueRange{result, resultShape})
+  return createTFLOperation(rewriter, loc, "tfl.reshape", TypeRange{resultType},
+      ValueRange{result, resultShape})
       ->getResult(0);
 }
 
-class DeformConvLowering final
-    : public OpConversionPattern<ONNXDeformConvOp> {
+class DeformConvLowering final : public OpConversionPattern<ONNXDeformConvOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
 
@@ -134,8 +131,7 @@ public:
     int64_t outputChannels = wShape[0], kernelHeight = wShape[2];
     int64_t kernelWidth = wShape[3], outputHeight = yShape[2];
     int64_t outputWidth = yShape[3];
-    SmallVector<int64_t> kernel =
-        integerArray(op, "kernel_shape", 0, 0);
+    SmallVector<int64_t> kernel = integerArray(op, "kernel_shape", 0, 0);
     if (kernel.empty())
       kernel = {kernelHeight, kernelWidth};
     SmallVector<int64_t> strides = integerArray(op, "strides", 2, 1);
@@ -155,19 +151,19 @@ public:
     SmallVector<float> bias(outputChannels, 0.0f);
     if (!isa<NoneType>(op.getB().getType())) {
       FailureOr<SmallVector<float>> values = getConstantF32Values(op.getB());
-      if (failed(values) || values->size() != static_cast<size_t>(outputChannels))
+      if (failed(values) ||
+          values->size() != static_cast<size_t>(outputChannels))
         return op.emitError("DeformConv bias must be constant"), failure();
       bias = *values;
     }
-    SmallVector<float> mask(batch * kernelElements * outputHeight * outputWidth,
-        1.0f);
+    SmallVector<float> mask(
+        batch * kernelElements * outputHeight * outputWidth, 1.0f);
     if (!isa<NoneType>(op.getMask().getType())) {
       auto maskType = dyn_cast<RankedTensorType>(op.getMask().getType());
-      FailureOr<SmallVector<float>> values =
-          getConstantF32Values(op.getMask());
-      if (!maskType || maskType.getShape() !=
-                           ArrayRef<int64_t>({batch, kernelElements,
-                               outputHeight, outputWidth}) ||
+      FailureOr<SmallVector<float>> values = getConstantF32Values(op.getMask());
+      if (!maskType ||
+          maskType.getShape() != ArrayRef<int64_t>({batch, kernelElements,
+                                     outputHeight, outputWidth}) ||
           failed(values))
         return op.emitError("DeformConv mask must be a shape-consistent "
                             "constant"),
@@ -203,10 +199,9 @@ public:
                 for (int64_t kx = 0; kx < kernelWidth; ++kx) {
                   int64_t k = ky * kernelWidth + kx;
                   // ONNX packs offsets as [kH, kW, spatial-axis].
-                  float py = oy * strides[0] - pads[0] +
-                             ky * dilations[0] + offsetAt(n, k * 2, oy, ox);
-                  float px = ox * strides[1] - pads[1] +
-                             kx * dilations[1] +
+                  float py = oy * strides[0] - pads[0] + ky * dilations[0] +
+                             offsetAt(n, k * 2, oy, ox);
+                  float px = ox * strides[1] - pads[1] + kx * dilations[1] +
                              offsetAt(n, k * 2 + 1, oy, ox);
                   int64_t y0 = static_cast<int64_t>(std::floor(py));
                   int64_t x0 = static_cast<int64_t>(std::floor(px));
@@ -216,8 +211,7 @@ public:
                       ((oc * inputChannels + ic) * kernelHeight + ky) *
                           kernelWidth +
                       kx;
-                  float base = (*weights)[weightIndex] *
-                               maskAt(n, k, oy, ox);
+                  float base = (*weights)[weightIndex] * maskAt(n, k, oy, ox);
                   int64_t ys[4] = {y0, y0, y0 + 1, y0 + 1};
                   int64_t xs[4] = {x0, x0 + 1, x0, x0 + 1};
                   float interpolation[4] = {(1.0f - dy) * (1.0f - dx),
@@ -226,11 +220,10 @@ public:
                     bool valid = ys[neighbor] >= 0 &&
                                  ys[neighbor] < inputHeight &&
                                  xs[neighbor] >= 0 && xs[neighbor] < inputWidth;
-                    coordinates.append(
-                        {static_cast<int32_t>(valid ? n : 0),
-                            static_cast<int32_t>(valid ? ic : 0),
-                            static_cast<int32_t>(valid ? ys[neighbor] : 0),
-                            static_cast<int32_t>(valid ? xs[neighbor] : 0)});
+                    coordinates.append({static_cast<int32_t>(valid ? n : 0),
+                        static_cast<int32_t>(valid ? ic : 0),
+                        static_cast<int32_t>(valid ? ys[neighbor] : 0),
+                        static_cast<int32_t>(valid ? xs[neighbor] : 0)});
                     coefficients.push_back(
                         valid ? base * interpolation[neighbor] : 0.0f);
                   }
@@ -283,8 +276,7 @@ public:
     auto denormalize = [&](float value, int64_t extent) {
       return op.getAlignCorners() != 0
                  ? (value + 1.0f) * static_cast<float>(extent - 1) * 0.5f
-                 : ((value + 1.0f) * static_cast<float>(extent) - 1.0f) *
-                       0.5f;
+                 : ((value + 1.0f) * static_cast<float>(extent) - 1.0f) * 0.5f;
     };
     SmallVector<int32_t> coordinates;
     coordinates.reserve(resultType.getNumElements() * 5);
@@ -293,7 +285,8 @@ public:
         for (int64_t oz = 0; oz < y[2]; ++oz)
           for (int64_t oy = 0; oy < y[3]; ++oy)
             for (int64_t ox = 0; ox < y[4]; ++ox) {
-              int64_t gridBase = (((n * g[1] + oz) * g[2] + oy) * g[3] + ox) * 3;
+              int64_t gridBase =
+                  (((n * g[1] + oz) * g[2] + oy) * g[3] + ox) * 3;
               int64_t ix = static_cast<int64_t>(
                   std::nearbyint(denormalize((*grid)[gridBase], x[4])));
               int64_t iy = static_cast<int64_t>(
@@ -311,19 +304,17 @@ public:
     auto coordinateType =
         RankedTensorType::get({elements, 5}, rewriter.getI32Type());
     Value indices = arith::ConstantOp::create(rewriter, op.getLoc(),
-        coordinateType,
-        DenseIntElementsAttr::get(coordinateType, coordinates));
-    auto flatType =
-        RankedTensorType::get({elements}, rewriter.getF32Type());
+        coordinateType, DenseIntElementsAttr::get(coordinateType, coordinates));
+    auto flatType = RankedTensorType::get({elements}, rewriter.getF32Type());
     Value gathered = createTFLOperation(rewriter, op.getLoc(), "tfl.gather_nd",
         TypeRange{flatType}, ValueRange{adaptor.getX(), indices})
                          ->getResult(0);
     Value shape =
         createI32ShapeConstant(rewriter, op.getLoc(), resultType.getShape());
-    rewriter.replaceOp(op,
-        createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
-            TypeRange{resultType}, ValueRange{gathered, shape})
-            ->getResult(0));
+    rewriter.replaceOp(
+        op, createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+                TypeRange{resultType}, ValueRange{gathered, shape})
+                ->getResult(0));
     return success();
   }
 };
@@ -336,8 +327,7 @@ public:
       ConversionPatternRewriter &rewriter) const override {
     auto inputType = dyn_cast<RankedTensorType>(op.getX().getType());
     auto roiType = dyn_cast<RankedTensorType>(op.getRois().getType());
-    auto batchType =
-        dyn_cast<RankedTensorType>(op.getBatchIndices().getType());
+    auto batchType = dyn_cast<RankedTensorType>(op.getBatchIndices().getType());
     auto resultType = dyn_cast<RankedTensorType>(op.getY().getType());
     FailureOr<SmallVector<float>> rois = getConstantF32Values(op.getRois());
     FailureOr<SmallVector<int64_t>> batchIndices =
@@ -378,18 +368,17 @@ public:
     coordinates.reserve(outputElements * termsPerOutput * 4);
     coefficients.reserve(outputElements * termsPerOutput);
     float scale = op.getSpatialScale().convertToFloat();
-    float offset = op.getCoordinateTransformationMode() == "half_pixel"
-                       ? 0.5f
-                       : 0.0f;
+    float offset =
+        op.getCoordinateTransformationMode() == "half_pixel" ? 0.5f : 0.0f;
     auto addNeighbor = [&](int64_t batch, int64_t channel, int64_t py,
                            int64_t px, float coefficient) {
-      coordinates.append({static_cast<int32_t>(batch),
-          static_cast<int32_t>(channel), static_cast<int32_t>(py),
-          static_cast<int32_t>(px)});
-      coefficients.push_back(op.getMode() == "avg"
-                                 ? coefficient /
-                                       static_cast<float>(ratio * ratio)
-                                 : coefficient);
+      coordinates.append(
+          {static_cast<int32_t>(batch), static_cast<int32_t>(channel),
+              static_cast<int32_t>(py), static_cast<int32_t>(px)});
+      coefficients.push_back(
+          op.getMode() == "avg"
+              ? coefficient / static_cast<float>(ratio * ratio)
+              : coefficient);
     };
     for (int64_t roi = 0; roi < numRois; ++roi) {
       int64_t batch = (*batchIndices)[roi];
@@ -406,12 +395,12 @@ public:
           for (int64_t pw = 0; pw < pooledWidth; ++pw)
             for (int64_t iy = 0; iy < ratio; ++iy)
               for (int64_t ix = 0; ix < ratio; ++ix) {
-                float sampleY = startY + ph * binHeight +
-                                (iy + 0.5f) * binHeight /
-                                    static_cast<float>(ratio);
-                float sampleX = startX + pw * binWidth +
-                                (ix + 0.5f) * binWidth /
-                                    static_cast<float>(ratio);
+                float sampleY =
+                    startY + ph * binHeight +
+                    (iy + 0.5f) * binHeight / static_cast<float>(ratio);
+                float sampleX =
+                    startX + pw * binWidth +
+                    (ix + 0.5f) * binWidth / static_cast<float>(ratio);
                 if (sampleY < -1.0f || sampleY > height || sampleX < -1.0f ||
                     sampleX > width) {
                   for (int64_t neighbor = 0; neighbor < 4; ++neighbor)

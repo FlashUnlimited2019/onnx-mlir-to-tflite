@@ -156,8 +156,7 @@ public:
       statisticShape[axis] = 1;
     auto statisticType =
         RankedTensorType::get(statisticShape, rewriter.getF32Type());
-    Value axes =
-        createI32ShapeConstant(rewriter, op.getLoc(), reductionAxes);
+    Value axes = createI32ShapeConstant(rewriter, op.getLoc(), reductionAxes);
     SmallVector<NamedAttribute> keepDims{
         rewriter.getNamedAttr("keep_dims", rewriter.getBoolAttr(true))};
     SmallVector<NamedAttribute> fusedNone{getFusedActivationNone(rewriter)};
@@ -193,10 +192,10 @@ public:
       parameterBroadcastShape.assign(rank, 1);
       parameterBroadcastShape[1] = channels;
     }
-    auto parameterType = RankedTensorType::get(
-        parameterBroadcastShape, rewriter.getF32Type());
-    Value parameterShape = createI32ShapeConstant(
-        rewriter, op.getLoc(), parameterBroadcastShape);
+    auto parameterType =
+        RankedTensorType::get(parameterBroadcastShape, rewriter.getF32Type());
+    Value parameterShape =
+        createI32ShapeConstant(rewriter, op.getLoc(), parameterBroadcastShape);
     Operation *scale = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
         TypeRange{parameterType},
         ValueRange{adaptor.getScale(), parameterShape});

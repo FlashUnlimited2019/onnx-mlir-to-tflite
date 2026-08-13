@@ -47,8 +47,8 @@ public:
         getIntegerArray(op, "strides", SmallVector<int64_t>(spatialRank, 1));
     SmallVector<int64_t> pads =
         getIntegerArray(op, "pads", SmallVector<int64_t>(2 * spatialRank, 0));
-    SmallVector<int64_t> dilations = getIntegerArray(
-        op, "dilations", SmallVector<int64_t>(spatialRank, 1));
+    SmallVector<int64_t> dilations =
+        getIntegerArray(op, "dilations", SmallVector<int64_t>(spatialRank, 1));
     if (kernel.size() != static_cast<size_t>(spatialRank) ||
         strides.size() != static_cast<size_t>(spatialRank) ||
         pads.size() != static_cast<size_t>(2 * spatialRank) ||
@@ -124,8 +124,9 @@ public:
         inputType.getRank() > 5 || !inputType.getElementType().isF32() ||
         !valueType.getElementType().isF32() ||
         !indicesType.getElementType().isSignlessInteger(64))
-      return op.emitError("ONNXToTFL indexed MaxPool supports static rank-3/4/5 "
-                          "f32 tensors with i64 indices"),
+      return op.emitError(
+                 "ONNXToTFL indexed MaxPool supports static rank-3/4/5 "
+                 "f32 tensors with i64 indices"),
              failure();
     if (op.getCeilMode() != 0 || op.getStorageOrder() != 0 ||
         op.getAutoPad() != "NOTSET")
@@ -133,14 +134,13 @@ public:
                           "0, and auto_pad NOTSET"),
              failure();
     int64_t spatialRank = inputType.getRank() - 2;
-    SmallVector<int64_t> kernel =
-        getIntegerArray(op, "kernel_shape");
+    SmallVector<int64_t> kernel = getIntegerArray(op, "kernel_shape");
     SmallVector<int64_t> strides =
         getIntegerArray(op, "strides", SmallVector<int64_t>(spatialRank, 1));
     SmallVector<int64_t> pads =
         getIntegerArray(op, "pads", SmallVector<int64_t>(2 * spatialRank, 0));
-    SmallVector<int64_t> dilations = getIntegerArray(
-        op, "dilations", SmallVector<int64_t>(spatialRank, 1));
+    SmallVector<int64_t> dilations =
+        getIntegerArray(op, "dilations", SmallVector<int64_t>(spatialRank, 1));
     if (kernel.size() != static_cast<size_t>(spatialRank) ||
         strides.size() != static_cast<size_t>(spatialRank) ||
         pads.size() != static_cast<size_t>(2 * spatialRank) ||
@@ -188,17 +188,15 @@ public:
       for (int64_t axis = 0; axis < spatialRank; ++axis) {
         begin[axis + 2] = offset[axis];
         stride[axis + 2] = strides[axis];
-        end[axis + 2] = offset[axis] +
-                        (outputShape[axis + 2] - 1) * strides[axis] + 1;
+        end[axis + 2] =
+            offset[axis] + (outputShape[axis + 2] - 1) * strides[axis] + 1;
       }
       Value beginValue = createI32ShapeConstant(rewriter, op.getLoc(), begin);
       Value endValue = createI32ShapeConstant(rewriter, op.getLoc(), end);
-      Value strideValue =
-          createI32ShapeConstant(rewriter, op.getLoc(), stride);
+      Value strideValue = createI32ShapeConstant(rewriter, op.getLoc(), stride);
       Value candidateValue = createTFLOperation(rewriter, op.getLoc(),
           "tfl.strided_slice", TypeRange{valueType},
-          ValueRange{input, beginValue, endValue, strideValue},
-          sliceAttributes)
+          ValueRange{input, beginValue, endValue, strideValue}, sliceAttributes)
                                  ->getResult(0);
 
       SmallVector<int64_t> flatIndices;
@@ -226,8 +224,8 @@ public:
         bestIndex = candidateIndex;
         continue;
       }
-      auto conditionType = RankedTensorType::get(
-          valueType.getShape(), rewriter.getI1Type());
+      auto conditionType =
+          RankedTensorType::get(valueType.getShape(), rewriter.getI1Type());
       Value better = createTFLOperation(rewriter, op.getLoc(), "tfl.greater",
           TypeRange{conditionType}, ValueRange{candidateValue, bestValue})
                          ->getResult(0);
@@ -251,8 +249,7 @@ public:
   }
 };
 
-class MaxUnpoolLowering final
-    : public OpConversionPattern<ONNXMaxUnpoolOp> {
+class MaxUnpoolLowering final : public OpConversionPattern<ONNXMaxUnpoolOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(ONNXMaxUnpoolOp op, OpAdaptor adaptor,
@@ -296,10 +293,9 @@ public:
     Value reshapedIndices = createTFLOperation(rewriter, op.getLoc(),
         "tfl.reshape", TypeRange{reshapedIndicesType},
         ValueRange{adaptor.getI(), scatterIndexShape})
-                               ->getResult(0);
-    Value scatterIndices = createTFLOperation(rewriter, op.getLoc(),
-        "tfl.cast", TypeRange{scatterIndicesType},
-        ValueRange{reshapedIndices})
+                                ->getResult(0);
+    Value scatterIndices = createTFLOperation(rewriter, op.getLoc(), "tfl.cast",
+        TypeRange{scatterIndicesType}, ValueRange{reshapedIndices})
                                ->getResult(0);
     Value outputShape =
         createI32ShapeConstant(rewriter, op.getLoc(), {outputCount});
@@ -309,8 +305,8 @@ public:
         "tfl.scatter_nd", TypeRange{flatOutputType},
         ValueRange{scatterIndices, flatValues, outputShape})
                            ->getResult(0);
-    Value logicalShape = createI32ShapeConstant(
-        rewriter, op.getLoc(), resultType.getShape());
+    Value logicalShape =
+        createI32ShapeConstant(rewriter, op.getLoc(), resultType.getShape());
     Value result = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
         TypeRange{resultType}, ValueRange{flatOutput, logicalShape})
                        ->getResult(0);
@@ -332,8 +328,7 @@ public:
 void populateLoweringONNXIndexedMaxPoolOpToTFLPatterns(
     RewritePatternSet &patterns, TypeConverter &typeConverter) {
   patterns.add<StaticNon2DMaxPoolLowering, MaxPoolWithIndicesLowering,
-      MaxUnpoolLowering>(
-      typeConverter, patterns.getContext());
+      MaxUnpoolLowering>(typeConverter, patterns.getContext());
 }
 
 } // namespace onnx_mlir

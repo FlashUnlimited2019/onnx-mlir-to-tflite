@@ -59,7 +59,7 @@ public:
     expectedShape.reserve(sourceResultType.getRank());
     int64_t sourceAxis = 0;
     for (int64_t resultAxis = 0; resultAxis < sourceResultType.getRank();
-        ++resultAxis) {
+         ++resultAxis) {
       if (insertedAxes[resultAxis])
         expectedShape.push_back(1);
       else

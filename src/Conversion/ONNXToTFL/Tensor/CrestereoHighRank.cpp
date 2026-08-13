@@ -48,8 +48,8 @@ public:
     int64_t axis = normalizeAxis((*axes)[0], rank);
     if (axis < 0 || axis >= rank || axis != concat.getAxis())
       return failure();
-    int64_t prefix = std::clamp((*ends)[0], int64_t{0},
-        inputType.getShape()[axis]);
+    int64_t prefix =
+        std::clamp((*ends)[0], int64_t{0}, inputType.getShape()[axis]);
     if (prefix <= 0 || outputType.getShape()[axis] != prefix)
       return failure();
 
@@ -91,8 +91,8 @@ public:
         prefixOperands.front().getType() == outputType) {
       replacement = prefixOperands.front();
     } else {
-      replacement = ONNXConcatOp::create(rewriter, op.getLoc(), outputType,
-          prefixOperands, axis);
+      replacement = ONNXConcatOp::create(
+          rewriter, op.getLoc(), outputType, prefixOperands, axis);
     }
     rewriter.replaceOp(op, replacement);
     return success();
@@ -487,10 +487,9 @@ public:
 } // namespace
 
 void populateONNXToTFLPreprocessingPatterns(RewritePatternSet &patterns) {
-  patterns
-      .add<PruneStaticConcatPrefixSlicePattern,
-          CollapseSingletonExpandReshapePattern, LowerConvexUpsamplePattern>(
-          patterns.getContext());
+  patterns.add<PruneStaticConcatPrefixSlicePattern,
+      CollapseSingletonExpandReshapePattern, LowerConvexUpsamplePattern>(
+      patterns.getContext());
 }
 
 } // namespace onnx_mlir

@@ -23,8 +23,8 @@ Value binary(ConversionPatternRewriter &rewriter, Location loc, StringRef name,
   SmallVector<NamedAttribute> attributes;
   if (hasFusedActivation)
     attributes.push_back(getFusedActivationNone(rewriter));
-  return createTFLOperation(rewriter, loc, name, TypeRange{type},
-      ValueRange{lhs, rhs}, attributes)
+  return createTFLOperation(
+      rewriter, loc, name, TypeRange{type}, ValueRange{lhs, rhs}, attributes)
       ->getResult(0);
 }
 
@@ -49,8 +49,8 @@ enum class CompositeKind {
 template <typename ONNXOp>
 class CompositeUnaryLowering final : public OpConversionPattern<ONNXOp> {
 public:
-  CompositeUnaryLowering(TypeConverter &typeConverter, MLIRContext *context,
-      CompositeKind kind)
+  CompositeUnaryLowering(
+      TypeConverter &typeConverter, MLIRContext *context, CompositeKind kind)
       : OpConversionPattern<ONNXOp>(typeConverter, context), kind(kind) {}
 
   using OpAdaptor = typename ONNXOp::Adaptor;
@@ -62,11 +62,10 @@ public:
     if (!sourceResultType ||
         failed(validateStaticF32TensorOrScalar(
             op, op->getOperand(0).getType(), "input")) ||
-        failed(validateStaticF32TensorOrScalar(
-            op, sourceResultType, "result")))
+        failed(validateStaticF32TensorOrScalar(op, sourceResultType, "result")))
       return failure();
-    auto resultType = cast<RankedTensorType>(
-        convertRank4NCHWToNHWCType(sourceResultType));
+    auto resultType =
+        cast<RankedTensorType>(convertRank4NCHWToNHWCType(sourceResultType));
     Location loc = op.getLoc();
     auto scalar = [&](float value) {
       return createF32ScalarTensorConstant(rewriter, loc, value);
@@ -99,8 +98,8 @@ public:
     Value result;
     switch (kind) {
     case CompositeKind::Celu: {
-      float alpha = op->template getAttrOfType<FloatAttr>("alpha")
-                        .getValueAsDouble();
+      float alpha =
+          op->template getAttrOfType<FloatAttr>("alpha").getValueAsDouble();
       Value alphaValue = scalar(alpha);
       Value positive = binary(rewriter, loc, "tfl.maximum", resultType, input,
           zero, /*hasFusedActivation=*/false);
@@ -113,10 +112,10 @@ public:
       break;
     }
     case CompositeKind::Selu: {
-      float alpha = op->template getAttrOfType<FloatAttr>("alpha")
-                        .getValueAsDouble();
-      float gamma = op->template getAttrOfType<FloatAttr>("gamma")
-                        .getValueAsDouble();
+      float alpha =
+          op->template getAttrOfType<FloatAttr>("alpha").getValueAsDouble();
+      float gamma =
+          op->template getAttrOfType<FloatAttr>("gamma").getValueAsDouble();
       Value positive = binary(rewriter, loc, "tfl.maximum", resultType, input,
           zero, /*hasFusedActivation=*/false);
       Value negative = mul(scalar(alpha),
@@ -138,16 +137,16 @@ public:
       break;
     }
     case CompositeKind::Softsign:
-      result = div(input,
-          add(one, unary(rewriter, loc, "tfl.abs", resultType, input)));
+      result = div(
+          input, add(one, unary(rewriter, loc, "tfl.abs", resultType, input)));
       break;
     case CompositeKind::Shrink: {
-      float bias = op->template getAttrOfType<FloatAttr>("bias")
-                       .getValueAsDouble();
-      float lambda = op->template getAttrOfType<FloatAttr>("lambd")
-                         .getValueAsDouble();
-      auto conditionType = RankedTensorType::get(
-          resultType.getShape(), rewriter.getI1Type());
+      float bias =
+          op->template getAttrOfType<FloatAttr>("bias").getValueAsDouble();
+      float lambda =
+          op->template getAttrOfType<FloatAttr>("lambd").getValueAsDouble();
+      auto conditionType =
+          RankedTensorType::get(resultType.getShape(), rewriter.getI1Type());
       Value above = createTFLOperation(rewriter, loc, "tfl.greater",
           TypeRange{conditionType},
           ValueRange{input, comparisonConstant(lambda)})
@@ -167,10 +166,10 @@ public:
       break;
     }
     case CompositeKind::ThresholdedRelu: {
-      float alpha = op->template getAttrOfType<FloatAttr>("alpha")
-                        .getValueAsDouble();
-      auto conditionType = RankedTensorType::get(
-          resultType.getShape(), rewriter.getI1Type());
+      float alpha =
+          op->template getAttrOfType<FloatAttr>("alpha").getValueAsDouble();
+      auto conditionType =
+          RankedTensorType::get(resultType.getShape(), rewriter.getI1Type());
       Value condition = createTFLOperation(rewriter, loc, "tfl.greater",
           TypeRange{conditionType},
           ValueRange{input, comparisonConstant(alpha)})
@@ -201,9 +200,8 @@ public:
       break;
     }
     case CompositeKind::Atanh:
-      result = mul(scalar(0.5f),
-          unary(rewriter, loc, "tfl.log", resultType,
-              div(add(one, input), sub(one, input))));
+      result = mul(scalar(0.5f), unary(rewriter, loc, "tfl.log", resultType,
+                                     div(add(one, input), sub(one, input))));
       break;
     case CompositeKind::Sinh:
     case CompositeKind::Cosh: {
@@ -211,15 +209,14 @@ public:
       Value negative = unary(rewriter, loc, "tfl.exp", resultType,
           unary(rewriter, loc, "tfl.neg", resultType, input));
       Value combined = kind == CompositeKind::Sinh ? sub(positive, negative)
-                                                    : add(positive, negative);
+                                                   : add(positive, negative);
       result = mul(scalar(0.5f), combined);
       break;
     }
     case CompositeKind::Asinh:
       result = unary(rewriter, loc, "tfl.log", resultType,
-          add(input,
-              unary(rewriter, loc, "tfl.sqrt", resultType,
-                  add(mul(input, input), one))));
+          add(input, unary(rewriter, loc, "tfl.sqrt", resultType,
+                         add(mul(input, input), one))));
       break;
     case CompositeKind::Acosh: {
       Value radicand = binary(rewriter, loc, "tfl.maximum", resultType,
@@ -234,16 +231,15 @@ public:
       // about 1.2e-7 for f32 and it uses only portable TFL builtins.
       Value absolute = unary(rewriter, loc, "tfl.abs", resultType, input);
       Value t = div(one, add(one, mul(scalar(0.5f), absolute)));
-      constexpr float coefficients[] = {0.17087277f, -0.82215223f,
-          1.48851587f, -1.13520398f, 0.27886807f, -0.18628806f,
-          0.09678418f, 0.37409196f, 1.00002368f};
+      constexpr float coefficients[] = {0.17087277f, -0.82215223f, 1.48851587f,
+          -1.13520398f, 0.27886807f, -0.18628806f, 0.09678418f, 0.37409196f,
+          1.00002368f};
       Value polynomial = scalar(coefficients[0]);
       for (float coefficient : llvm::drop_begin(coefficients))
         polynomial = add(scalar(coefficient), mul(t, polynomial));
-      Value exponent = add(
-          sub(unary(rewriter, loc, "tfl.neg", resultType,
-                  mul(absolute, absolute)),
-              scalar(1.26551223f)),
+      Value exponent = add(sub(unary(rewriter, loc, "tfl.neg", resultType,
+                                   mul(absolute, absolute)),
+                               scalar(1.26551223f)),
           mul(t, polynomial));
       Value tau = mul(t, unary(rewriter, loc, "tfl.exp", resultType, exponent));
       Value magnitude = sub(one, tau);
@@ -307,9 +303,10 @@ public:
     Type physicalType = convertRank4NCHWToNHWCType(resultType);
     Value sum = adaptor.getOperands().front();
     for (Value operand : llvm::drop_begin(adaptor.getOperands()))
-      sum = binary(rewriter, op.getLoc(), "tfl.add", physicalType, sum, operand);
-    Value count = createF32ScalarTensorConstant(
-        rewriter, op.getLoc(), static_cast<float>(adaptor.getOperands().size()));
+      sum =
+          binary(rewriter, op.getLoc(), "tfl.add", physicalType, sum, operand);
+    Value count = createF32ScalarTensorConstant(rewriter, op.getLoc(),
+        static_cast<float>(adaptor.getOperands().size()));
     Value result =
         binary(rewriter, op.getLoc(), "tfl.div", physicalType, sum, count);
     rewriter.replaceOp(op, result);
@@ -320,8 +317,8 @@ public:
 template <typename ONNXOp>
 class LogicalBinaryLowering final : public OpConversionPattern<ONNXOp> {
 public:
-  LogicalBinaryLowering(TypeConverter &typeConverter, MLIRContext *context,
-      StringRef tflName)
+  LogicalBinaryLowering(
+      TypeConverter &typeConverter, MLIRContext *context, StringRef tflName)
       : OpConversionPattern<ONNXOp>(typeConverter, context), tflName(tflName) {}
   using OpAdaptor = typename ONNXOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXOp op, OpAdaptor adaptor,

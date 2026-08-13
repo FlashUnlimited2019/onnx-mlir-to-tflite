@@ -169,10 +169,12 @@ public:
     SmallVector<NamedAttribute> fusedNone{getFusedActivationNone(rewriter)};
     Value replacements = updates;
     if (reduction != "none") {
-      StringRef operation = reduction == "add"   ? "tfl.add"
-                            : reduction == "mul" ? "tfl.mul"
-                            : reduction == "max" ? "tfl.maximum"
-                                                 : "tfl.minimum";
+      StringRef operation =
+          reduction == "add"
+              ? "tfl.add"
+              : reduction == "mul"
+                    ? "tfl.mul"
+                    : reduction == "max" ? "tfl.maximum" : "tfl.minimum";
       ArrayRef<NamedAttribute> attributes =
           (reduction == "add" || reduction == "mul")
               ? ArrayRef<NamedAttribute>(fusedNone)
@@ -183,8 +185,8 @@ public:
                          ->getResult(0);
     }
     Value deltas = createTFLOperation(rewriter, op.getLoc(), "tfl.sub",
-        TypeRange{calculationUpdatesType},
-        ValueRange{replacements, oldValues}, fusedNone)
+        TypeRange{calculationUpdatesType}, ValueRange{replacements, oldValues},
+        fusedNone)
                        ->getResult(0);
     Value shape = createI32ShapeConstant(rewriter, op.getLoc(), dataShape);
     Value sparseDeltas =

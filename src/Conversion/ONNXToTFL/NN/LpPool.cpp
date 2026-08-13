@@ -48,9 +48,11 @@ public:
     auto inputType = dyn_cast<RankedTensorType>(op.getX().getType());
     auto resultType = dyn_cast<RankedTensorType>(op.getY().getType());
     if (!inputType || !resultType || inputType.getRank() < 3 ||
-        inputType.getRank() > 5 || resultType.getRank() != inputType.getRank() ||
+        inputType.getRank() > 5 ||
+        resultType.getRank() != inputType.getRank() ||
         failed(validateStaticF32Tensor(op, inputType, "GlobalLpPool input")) ||
-        failed(validateStaticF32Tensor(op, resultType, "GlobalLpPool result")) ||
+        failed(
+            validateStaticF32Tensor(op, resultType, "GlobalLpPool result")) ||
         op.getP() != 2)
       return op.emitError("ONNXToTFL GlobalLpPool supports p=2 on static "
                           "rank-3 through rank-5 f32 tensors only"),
@@ -72,8 +74,7 @@ public:
     SmallVector<int64_t> axes;
     for (int64_t logicalAxis = 2; logicalAxis < inputType.getRank();
          ++logicalAxis)
-      axes.push_back(
-          getLpPoolPhysicalAxis(inputType.getRank(), logicalAxis));
+      axes.push_back(getLpPoolPhysicalAxis(inputType.getRank(), logicalAxis));
     Value axesValue = createI32ShapeConstant(rewriter, loc, axes);
     SmallVector<NamedAttribute> sumAttributes{
         rewriter.getNamedAttr("keep_dims", rewriter.getBoolAttr(true))};
@@ -98,7 +99,8 @@ public:
     auto inputType = dyn_cast<RankedTensorType>(op.getX().getType());
     auto resultType = dyn_cast<RankedTensorType>(op.getY().getType());
     if (!inputType || !resultType || inputType.getRank() < 3 ||
-        inputType.getRank() > 5 || resultType.getRank() != inputType.getRank() ||
+        inputType.getRank() > 5 ||
+        resultType.getRank() != inputType.getRank() ||
         failed(validateStaticF32Tensor(op, inputType, "LpPool input")) ||
         failed(validateStaticF32Tensor(op, resultType, "LpPool result")) ||
         op.getP() != 2)
@@ -109,12 +111,12 @@ public:
     int64_t rank = inputType.getRank();
     int64_t spatialRank = rank - 2;
     SmallVector<int64_t> kernel = getLpPoolArrayOr(op, "kernel_shape", {});
-    SmallVector<int64_t> strides = getLpPoolArrayOr(
-        op, "strides", SmallVector<int64_t>(spatialRank, 1));
-    SmallVector<int64_t> pads = getLpPoolArrayOr(
-        op, "pads", SmallVector<int64_t>(2 * spatialRank, 0));
-    SmallVector<int64_t> dilations = getLpPoolArrayOr(
-        op, "dilations", SmallVector<int64_t>(spatialRank, 1));
+    SmallVector<int64_t> strides =
+        getLpPoolArrayOr(op, "strides", SmallVector<int64_t>(spatialRank, 1));
+    SmallVector<int64_t> pads =
+        getLpPoolArrayOr(op, "pads", SmallVector<int64_t>(2 * spatialRank, 0));
+    SmallVector<int64_t> dilations =
+        getLpPoolArrayOr(op, "dilations", SmallVector<int64_t>(spatialRank, 1));
     if (kernel.size() != static_cast<size_t>(spatialRank) ||
         strides.size() != static_cast<size_t>(spatialRank) ||
         pads.size() != static_cast<size_t>(2 * spatialRank) ||
@@ -214,8 +216,8 @@ public:
       Value sum = createTFLOperation(rewriter, loc, "tfl.sum",
           TypeRange{cellType}, ValueRange{slice, axesValue}, sumAttributes)
                       ->getResult(0);
-      pieces.push_back(createTFLOperation(rewriter, loc, "tfl.sqrt",
-          TypeRange{cellType}, ValueRange{sum})
+      pieces.push_back(createTFLOperation(
+          rewriter, loc, "tfl.sqrt", TypeRange{cellType}, ValueRange{sum})
                            ->getResult(0));
     }
 
@@ -249,8 +251,7 @@ public:
     }
     if (pieces.size() != 1 ||
         !llvm::equal(pieceShape, physicalResultType.getShape()))
-      return op.emitError("failed to assemble static LpPool result"),
-             failure();
+      return op.emitError("failed to assemble static LpPool result"), failure();
     rewriter.replaceOp(op, pieces.front());
     return success();
   }

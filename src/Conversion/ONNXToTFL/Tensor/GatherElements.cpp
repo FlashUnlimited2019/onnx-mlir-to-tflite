@@ -147,8 +147,8 @@ public:
       Value zero = createI32ScalarTensorConstant(rewriter, op.getLoc(), 0);
       Value extent = createI32ScalarTensorConstant(
           rewriter, op.getLoc(), static_cast<int32_t>(dataShape[axis]));
-      auto conditionType =
-          RankedTensorType::get(comparisonType.getShape(), rewriter.getI1Type());
+      auto conditionType = RankedTensorType::get(
+          comparisonType.getShape(), rewriter.getI1Type());
       Value negative = createTFLOperation(rewriter, op.getLoc(), "tfl.less",
           TypeRange{conditionType}, ValueRange{comparisonIndices, zero})
                            ->getResult(0);

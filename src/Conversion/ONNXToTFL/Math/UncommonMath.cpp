@@ -34,14 +34,13 @@ Value makePhysicalRank4(ConversionPatternRewriter &rewriter, Location loc,
       ->getResult(0);
 }
 
-Value binary(ConversionPatternRewriter &rewriter, Location loc,
-    StringRef name, Type type, Value lhs, Value rhs,
-    bool fusedActivation = true) {
+Value binary(ConversionPatternRewriter &rewriter, Location loc, StringRef name,
+    Type type, Value lhs, Value rhs, bool fusedActivation = true) {
   SmallVector<NamedAttribute> attributes;
   if (fusedActivation)
     attributes.push_back(getFusedActivationNone(rewriter));
-  return createTFLOperation(rewriter, loc, name, TypeRange{type},
-      ValueRange{lhs, rhs}, attributes)
+  return createTFLOperation(
+      rewriter, loc, name, TypeRange{type}, ValueRange{lhs, rhs}, attributes)
       ->getResult(0);
 }
 
@@ -50,8 +49,8 @@ Value reshape(ConversionPatternRewriter &rewriter, Location loc, Value value,
   auto elementType = cast<ShapedType>(value.getType()).getElementType();
   auto resultType = RankedTensorType::get(shape, elementType);
   Value shapeValue = createI32ShapeConstant(rewriter, loc, shape);
-  return createTFLOperation(rewriter, loc, "tfl.reshape",
-      TypeRange{resultType}, ValueRange{value, shapeValue})
+  return createTFLOperation(rewriter, loc, "tfl.reshape", TypeRange{resultType},
+      ValueRange{value, shapeValue})
       ->getResult(0);
 }
 
@@ -72,9 +71,9 @@ public:
     SmallVector<int64_t> axes;
     SmallVector<int64_t> meanShape(inputType.getShape());
     for (Attribute attr : op.getAxes()) {
-      int64_t axis = normalizeAxis(
-          cast<IntegerAttr>(attr).getValue().getSExtValue(),
-          inputType.getRank());
+      int64_t axis =
+          normalizeAxis(cast<IntegerAttr>(attr).getValue().getSExtValue(),
+              inputType.getRank());
       if (axis < 0 || axis >= inputType.getRank())
         return op.emitError("MeanVarianceNormalization axis is out of range"),
                failure();
@@ -91,18 +90,17 @@ public:
     Value mean = createTFLOperation(rewriter, loc, "tfl.mean",
         TypeRange{meanType}, ValueRange{input, axisValue}, meanAttributes)
                      ->getResult(0);
-    Value centered = binary(
-        rewriter, loc, "tfl.sub", inputType, input, mean);
-    Value squared = binary(
-        rewriter, loc, "tfl.mul", inputType, centered, centered);
+    Value centered = binary(rewriter, loc, "tfl.sub", inputType, input, mean);
+    Value squared =
+        binary(rewriter, loc, "tfl.mul", inputType, centered, centered);
     Value variance = createTFLOperation(rewriter, loc, "tfl.mean",
         TypeRange{meanType}, ValueRange{squared, axisValue}, meanAttributes)
                          ->getResult(0);
-    Value deviation = createTFLOperation(rewriter, loc, "tfl.sqrt",
-        TypeRange{meanType}, ValueRange{variance})
+    Value deviation = createTFLOperation(
+        rewriter, loc, "tfl.sqrt", TypeRange{meanType}, ValueRange{variance})
                           ->getResult(0);
-    Value result = binary(
-        rewriter, loc, "tfl.div", resultType, centered, deviation);
+    Value result =
+        binary(rewriter, loc, "tfl.div", resultType, centered, deviation);
     rewriter.replaceOp(
         op, makePhysicalRank4(rewriter, loc, result, resultType));
     return success();
@@ -116,38 +114,39 @@ public:
       ConversionPatternRewriter &rewriter) const override {
     auto resultType = dyn_cast<RankedTensorType>(op.getY().getType());
     if (!resultType ||
-        failed(validateStaticF32Tensor(op, op.getX().getType(), "Mish input")) ||
+        failed(
+            validateStaticF32Tensor(op, op.getX().getType(), "Mish input")) ||
         failed(validateStaticF32Tensor(op, resultType, "Mish result")))
       return failure();
-    auto physicalType = cast<RankedTensorType>(
-        convertRank4NCHWToNHWCType(resultType));
+    auto physicalType =
+        cast<RankedTensorType>(convertRank4NCHWToNHWCType(resultType));
     Location loc = op.getLoc();
     Value input = adaptor.getOperands().front();
     Value zero = createF32ScalarTensorConstant(rewriter, loc, 0.0f);
     Value one = createF32ScalarTensorConstant(rewriter, loc, 1.0f);
-    Value positive = binary(rewriter, loc, "tfl.maximum", physicalType,
-        input, zero, /*fusedActivation=*/false);
-    Value absolute = createTFLOperation(rewriter, loc, "tfl.abs",
-        TypeRange{physicalType}, ValueRange{input})
+    Value positive = binary(rewriter, loc, "tfl.maximum", physicalType, input,
+        zero, /*fusedActivation=*/false);
+    Value absolute = createTFLOperation(
+        rewriter, loc, "tfl.abs", TypeRange{physicalType}, ValueRange{input})
                          ->getResult(0);
-    Value negative = createTFLOperation(rewriter, loc, "tfl.neg",
-        TypeRange{physicalType}, ValueRange{absolute})
+    Value negative = createTFLOperation(
+        rewriter, loc, "tfl.neg", TypeRange{physicalType}, ValueRange{absolute})
                          ->getResult(0);
-    Value exponential = createTFLOperation(rewriter, loc, "tfl.exp",
-        TypeRange{physicalType}, ValueRange{negative})
+    Value exponential = createTFLOperation(
+        rewriter, loc, "tfl.exp", TypeRange{physicalType}, ValueRange{negative})
                             ->getResult(0);
     Value tail = createTFLOperation(rewriter, loc, "tfl.log",
         TypeRange{physicalType},
-        ValueRange{binary(
-            rewriter, loc, "tfl.add", physicalType, one, exponential)})
+        ValueRange{
+            binary(rewriter, loc, "tfl.add", physicalType, one, exponential)})
                      ->getResult(0);
     Value softplus =
         binary(rewriter, loc, "tfl.add", physicalType, positive, tail);
     Value activated = createTFLOperation(rewriter, loc, "tfl.tanh",
         TypeRange{physicalType}, ValueRange{softplus})
                           ->getResult(0);
-    rewriter.replaceOp(op,
-        binary(rewriter, loc, "tfl.mul", physicalType, input, activated));
+    rewriter.replaceOp(
+        op, binary(rewriter, loc, "tfl.mul", physicalType, input, activated));
     return success();
   }
 };
@@ -187,7 +186,8 @@ public:
     }
 
     Location loc = op.getLoc();
-    Value input = restoreLogicalRank4(rewriter, loc, adaptor.getInput(), inputType);
+    Value input =
+        restoreLogicalRank4(rewriter, loc, adaptor.getInput(), inputType);
     SmallVector<int64_t> permutation;
     for (int64_t i = 0; i < rank - 1; ++i)
       if (i != axis)
@@ -231,8 +231,8 @@ public:
     SmallVector<float> sine;
     cosine.reserve(length * length);
     sine.reserve(length * length);
-    float scale = op.getInverse() != 0 ? 1.0f / static_cast<float>(length)
-                                       : 1.0f;
+    float scale =
+        op.getInverse() != 0 ? 1.0f / static_cast<float>(length) : 1.0f;
     for (int64_t sample = 0; sample < length; ++sample)
       for (int64_t frequency = 0; frequency < length; ++frequency) {
         double angle = 2.0 * pi * static_cast<double>(sample * frequency) /
@@ -244,8 +244,8 @@ public:
         RankedTensorType::get({length, length}, rewriter.getF32Type());
     Value cosineValue = arith::ConstantOp::create(rewriter, loc,
         coefficientType, DenseFPElementsAttr::get(coefficientType, cosine));
-    Value sineValue = arith::ConstantOp::create(rewriter, loc,
-        coefficientType, DenseFPElementsAttr::get(coefficientType, sine));
+    Value sineValue = arith::ConstantOp::create(rewriter, loc, coefficientType,
+        DenseFPElementsAttr::get(coefficientType, sine));
     SmallVector<NamedAttribute> matmulAttributes{
         rewriter.getNamedAttr("adj_x", rewriter.getBoolAttr(false)),
         rewriter.getNamedAttr("adj_y", rewriter.getBoolAttr(false))};
@@ -261,15 +261,15 @@ public:
     Value real;
     Value imag;
     if (op.getInverse() != 0) {
-      real = binary(
-          rewriter, loc, "tfl.sub", component2DType, realCos, imagSin);
-      imag = binary(
-          rewriter, loc, "tfl.add", component2DType, realSin, imagCos);
+      real =
+          binary(rewriter, loc, "tfl.sub", component2DType, realCos, imagSin);
+      imag =
+          binary(rewriter, loc, "tfl.add", component2DType, realSin, imagCos);
     } else {
-      real = binary(
-          rewriter, loc, "tfl.add", component2DType, realCos, imagSin);
-      imag = binary(
-          rewriter, loc, "tfl.sub", component2DType, imagCos, realSin);
+      real =
+          binary(rewriter, loc, "tfl.add", component2DType, realCos, imagSin);
+      imag =
+          binary(rewriter, loc, "tfl.sub", component2DType, imagCos, realSin);
     }
     auto packedType =
         RankedTensorType::get({outer, length, 2}, rewriter.getF32Type());
@@ -317,7 +317,8 @@ public:
     // dynamic loops or control flow.
     int64_t batches = resultType.getNumElements();
     Location loc = op.getLoc();
-    Value matrix = restoreLogicalRank4(rewriter, loc, adaptor.getX(), inputType);
+    Value matrix =
+        restoreLogicalRank4(rewriter, loc, adaptor.getX(), inputType);
     matrix = reshape(rewriter, loc, matrix, {batches, size, size});
     auto matrixType =
         RankedTensorType::get({batches, size, size}, rewriter.getF32Type());
@@ -330,10 +331,9 @@ public:
       Value pivot = createTFLOperation(rewriter, loc, "tfl.slice",
           TypeRange{pivotType}, ValueRange{matrix, pivotBegin, pivotSize})
                         ->getResult(0);
-      determinant = determinant
-                        ? binary(rewriter, loc, "tfl.mul", pivotType,
-                              determinant, pivot)
-                        : pivot;
+      determinant = determinant ? binary(rewriter, loc, "tfl.mul", pivotType,
+                                      determinant, pivot)
+                                : pivot;
       if (k + 1 == size)
         continue;
       auto columnType =
@@ -347,30 +347,27 @@ public:
           TypeRange{columnType}, ValueRange{matrix, columnBegin, columnSize})
                          ->getResult(0);
       Value rowBegin = createI32ShapeConstant(rewriter, loc, {0, k, 0});
-      Value rowSize =
-          createI32ShapeConstant(rewriter, loc, {batches, 1, size});
+      Value rowSize = createI32ShapeConstant(rewriter, loc, {batches, 1, size});
       Value row = createTFLOperation(rewriter, loc, "tfl.slice",
           TypeRange{rowType}, ValueRange{matrix, rowBegin, rowSize})
                       ->getResult(0);
       Value factors =
           binary(rewriter, loc, "tfl.div", columnType, column, pivot);
-      Value outer =
-          binary(rewriter, loc, "tfl.mul", matrixType, factors, row);
+      Value outer = binary(rewriter, loc, "tfl.mul", matrixType, factors, row);
       SmallVector<float> mask(size * size, 0.0f);
       for (int64_t i = k + 1; i < size; ++i)
         for (int64_t j = k + 1; j < size; ++j)
           mask[i * size + j] = 1.0f;
       auto maskType =
           RankedTensorType::get({1, size, size}, rewriter.getF32Type());
-      Value maskValue = arith::ConstantOp::create(rewriter, loc, maskType,
-          DenseFPElementsAttr::get(maskType, mask));
+      Value maskValue = arith::ConstantOp::create(
+          rewriter, loc, maskType, DenseFPElementsAttr::get(maskType, mask));
       Value correction =
           binary(rewriter, loc, "tfl.mul", matrixType, outer, maskValue);
-      matrix =
-          binary(rewriter, loc, "tfl.sub", matrixType, matrix, correction);
+      matrix = binary(rewriter, loc, "tfl.sub", matrixType, matrix, correction);
     }
-    rewriter.replaceOp(op,
-        reshape(rewriter, loc, determinant, resultType.getShape()));
+    rewriter.replaceOp(
+        op, reshape(rewriter, loc, determinant, resultType.getShape()));
     return success();
   }
 };
@@ -429,19 +426,18 @@ public:
         coordinates.push_back(static_cast<int32_t>(index[i]));
     }
     Location loc = op.getLoc();
-    Value input = restoreLogicalRank4(rewriter, loc, adaptor.getInput(), inputType);
+    Value input =
+        restoreLogicalRank4(rewriter, loc, adaptor.getInput(), inputType);
     auto coordinateType =
         RankedTensorType::get({samples, rank}, rewriter.getI32Type());
     Value coordinateValue = arith::ConstantOp::create(rewriter, loc,
-        coordinateType,
-        DenseIntElementsAttr::get(coordinateType, coordinates));
-    auto gatheredType =
-        RankedTensorType::get({samples}, rewriter.getF32Type());
+        coordinateType, DenseIntElementsAttr::get(coordinateType, coordinates));
+    auto gatheredType = RankedTensorType::get({samples}, rewriter.getF32Type());
     Value gathered = createTFLOperation(rewriter, loc, "tfl.gather_nd",
         TypeRange{gatheredType}, ValueRange{input, coordinateValue})
                          ->getResult(0);
-    Value losses = createTFLOperation(rewriter, loc, "tfl.neg",
-        TypeRange{gatheredType}, ValueRange{gathered})
+    Value losses = createTFLOperation(
+        rewriter, loc, "tfl.neg", TypeRange{gatheredType}, ValueRange{gathered})
                        ->getResult(0);
     Value result;
     if (op.getReduction() == "none") {
@@ -449,8 +445,8 @@ public:
       result = makePhysicalRank4(rewriter, loc, result, resultType);
     } else if (op.getReduction() == "mean" || op.getReduction() == "sum") {
       Value axes = createI32ShapeConstant(rewriter, loc, {0});
-      SmallVector<NamedAttribute> attributes{rewriter.getNamedAttr(
-          "keep_dims", rewriter.getBoolAttr(false))};
+      SmallVector<NamedAttribute> attributes{
+          rewriter.getNamedAttr("keep_dims", rewriter.getBoolAttr(false))};
       StringRef name = op.getReduction() == "mean" ? "tfl.mean" : "tfl.sum";
       result = createTFLOperation(rewriter, loc, name, TypeRange{resultType},
           ValueRange{losses, axes}, attributes)

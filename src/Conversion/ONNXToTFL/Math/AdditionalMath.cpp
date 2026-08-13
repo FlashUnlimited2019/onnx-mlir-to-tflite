@@ -60,14 +60,14 @@ public:
     Value axisValue = createI32ScalarTensorConstant(
         rewriter, op.getLoc(), static_cast<int32_t>(axis));
     SmallVector<NamedAttribute> attributes{
-        rewriter.getNamedAttr("exclusive",
-            rewriter.getBoolAttr(op.getExclusive() != 0)),
+        rewriter.getNamedAttr(
+            "exclusive", rewriter.getBoolAttr(op.getExclusive() != 0)),
         rewriter.getNamedAttr(
             "reverse", rewriter.getBoolAttr(op.getReverse() != 0))};
     Type physicalResultType = convertRank4NCHWToNHWCType(resultType);
     Value result = createTFLOperation(rewriter, op.getLoc(), "tfl.cumsum",
-        TypeRange{physicalResultType},
-        ValueRange{adaptor.getX(), axisValue}, attributes)
+        TypeRange{physicalResultType}, ValueRange{adaptor.getX(), axisValue},
+        attributes)
                        ->getResult(0);
     rewriter.replaceOp(op, result);
     return success();
@@ -86,9 +86,9 @@ public:
     if (auto valuesType = dyn_cast<RankedTensorType>(op.getValues().getType()))
       valueElementType = valuesType.getElementType();
     bool floatingValues = valueElementType && valueElementType.isF32();
-    bool integerValues = valueElementType &&
-                         (valueElementType.isSignlessInteger(32) ||
-                             valueElementType.isSignlessInteger(64));
+    bool integerValues =
+        valueElementType && (valueElementType.isSignlessInteger(32) ||
+                                valueElementType.isSignlessInteger(64));
     if (!indicesType || !resultType || !indicesType.hasStaticShape() ||
         !resultType.hasStaticShape() ||
         (!indicesType.getElementType().isSignlessInteger(32) &&
@@ -153,8 +153,8 @@ public:
 template <typename ONNXOp>
 class ReduceAttributeAxesLowering final : public OpConversionPattern<ONNXOp> {
 public:
-  ReduceAttributeAxesLowering(TypeConverter &typeConverter,
-      MLIRContext *context, StringRef tflName)
+  ReduceAttributeAxesLowering(
+      TypeConverter &typeConverter, MLIRContext *context, StringRef tflName)
       : OpConversionPattern<ONNXOp>(typeConverter, context), tflName(tflName) {}
   using OpAdaptor = typename ONNXOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXOp op, OpAdaptor adaptor,
@@ -169,9 +169,9 @@ public:
     SmallVector<int64_t> axes;
     if (auto attr = op->template getAttrOfType<ArrayAttr>("axes")) {
       for (Attribute element : attr)
-        axes.push_back(normalizeAxis(
-            cast<IntegerAttr>(element).getValue().getSExtValue(),
-            inputType.getRank()));
+        axes.push_back(
+            normalizeAxis(cast<IntegerAttr>(element).getValue().getSExtValue(),
+                inputType.getRank()));
     } else {
       for (int64_t axis = 0; axis < inputType.getRank(); ++axis)
         axes.push_back(axis);
@@ -247,8 +247,8 @@ public:
         !resultType.hasStaticShape() || !inputType.getElementType().isF32() ||
         !resultType.getElementType().isInteger(1))
       return failure();
-    Value input = restoreLogicalRank4(
-        rewriter, op.getLoc(), adaptor.getX(), inputType);
+    Value input =
+        restoreLogicalRank4(rewriter, op.getLoc(), adaptor.getX(), inputType);
     Value result = createTFLOperation(rewriter, op.getLoc(), "tfl.not_equal",
         TypeRange{resultType}, ValueRange{input, input})
                        ->getResult(0);
@@ -268,8 +268,8 @@ public:
         !resultType.hasStaticShape() || !inputType.getElementType().isF32() ||
         !resultType.getElementType().isInteger(1))
       return failure();
-    Value input = restoreLogicalRank4(
-        rewriter, op.getLoc(), adaptor.getX(), inputType);
+    Value input =
+        restoreLogicalRank4(rewriter, op.getLoc(), adaptor.getX(), inputType);
     auto comparisonConstant = [&](float value) -> Value {
       if (inputType.getRank() <= 4)
         return createF32ScalarTensorConstant(rewriter, op.getLoc(), value);

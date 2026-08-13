@@ -36,9 +36,10 @@ def builtin_operator_names() -> dict[int, str]:
 def main() -> int:
     args = parse_args()
     file_size = args.model.stat().st_size
-    with args.model.open("rb") as model_file, mmap.mmap(
-        model_file.fileno(), 0, access=mmap.ACCESS_READ
-    ) as data:
+    with (
+        args.model.open("rb") as model_file,
+        mmap.mmap(model_file.fileno(), 0, access=mmap.ACCESS_READ) as data,
+    ):
         if len(data) < 8 or data[4:8] != b"TFL3":
             raise ValueError(f"not a TFLite FlatBuffer: {args.model}")
 
@@ -58,9 +59,7 @@ def main() -> int:
                 operator = subgraph.Operators(operator_index)
                 opcode = model.OperatorCodes(operator.OpcodeIndex())
                 builtin_code = opcode.BuiltinCode()
-                name = builtin_names.get(
-                    builtin_code, f"BUILTIN_{builtin_code}"
-                )
+                name = builtin_names.get(builtin_code, f"BUILTIN_{builtin_code}")
                 if name == "CUSTOM":
                     custom_code = opcode.CustomCode()
                     if custom_code:
@@ -120,10 +119,7 @@ def main() -> int:
         )
         failed = True
     max_tensor_rank = max(tensor_rank_counts, default=0)
-    if (
-        args.max_tensor_rank is not None
-        and max_tensor_rank > args.max_tensor_rank
-    ):
+    if args.max_tensor_rank is not None and max_tensor_rank > args.max_tensor_rank:
         print(
             f"FAIL: maximum tensor rank {max_tensor_rank} exceeds "
             f"{args.max_tensor_rank}",
@@ -135,8 +131,7 @@ def main() -> int:
             forbidden_count = sum(
                 count
                 for operator_name, count in op_counts.items()
-                if operator_name == "CUSTOM"
-                or operator_name.startswith("CUSTOM:")
+                if operator_name == "CUSTOM" or operator_name.startswith("CUSTOM:")
             )
         elif name == "Flex":
             forbidden_count = sum(

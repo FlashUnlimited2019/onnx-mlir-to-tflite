@@ -101,7 +101,11 @@ def main() -> int:
             if node.op_type != "TopK":
                 continue
             sorted_attribute = next(
-                (attribute for attribute in node.attribute if attribute.name == "sorted"),
+                (
+                    attribute
+                    for attribute in node.attribute
+                    if attribute.name == "sorted"
+                ),
                 None,
             )
             if sorted_attribute is not None and sorted_attribute.i == 0:
@@ -124,7 +128,9 @@ def main() -> int:
             if isinstance(onnx_model, bytes)
             else onnx.load(args.onnx)
         )
-        initializer_names = {initializer.name for initializer in model.graph.initializer}
+        initializer_names = {
+            initializer.name for initializer in model.graph.initializer
+        }
         type_names = {
             onnx.TensorProto.FLOAT: "tensor(float)",
             onnx.TensorProto.INT32: "tensor(int32)",
@@ -184,9 +190,7 @@ def main() -> int:
             )
         low, high = integer_ranges[metadata.name]
         dtype = np.int32 if metadata.type == "tensor(int32)" else np.int64
-        ort_inputs[metadata.name] = rng.integers(
-            low, high, metadata.shape, dtype=dtype
-        )
+        ort_inputs[metadata.name] = rng.integers(low, high, metadata.shape, dtype=dtype)
 
     ort_outputs = run_onnx(ort_inputs)
     interpreter = tf.lite.Interpreter(
@@ -237,9 +241,7 @@ def main() -> int:
         )
 
     failed = False
-    for metadata, expected, actual in zip(
-        output_metadata, ort_outputs, tfl_outputs
-    ):
+    for metadata, expected, actual in zip(output_metadata, ort_outputs, tfl_outputs):
         if expected.shape != actual.shape:
             raise AssertionError(
                 f"output {metadata.name} shape differs: ONNX={expected.shape}, "
@@ -280,9 +282,7 @@ def main() -> int:
             f"TFLite={candidate[max_index]:.12g})"
         )
         if cosine < args.min_cosine:
-            print(
-                f"  FAIL: cosine {cosine} is below {args.min_cosine}"
-            )
+            print(f"  FAIL: cosine {cosine} is below {args.min_cosine}")
             failed = True
         if relative_euclidean > args.max_relative_euclidean:
             print(

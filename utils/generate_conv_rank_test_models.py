@@ -14,7 +14,6 @@ import onnx
 from onnx import TensorProto, helper, numpy_helper, shape_inference
 from onnx.utils import Extractor
 
-
 SEED = 20260805
 
 
@@ -50,11 +49,7 @@ def make_conv3d_model(
         rng.normal(0.0, 0.05, [output_channels]).astype(np.float32), "bias"
     )
     spatial_output = [
-        input_shape[index + 2]
-        + pads[index]
-        + pads[index + 3]
-        - kernel[index]
-        + 1
+        input_shape[index + 2] + pads[index] + pads[index + 3] - kernel[index] + 1
         for index in range(3)
     ]
     output_shape = [input_shape[0], output_channels, *spatial_output]
@@ -73,16 +68,8 @@ def make_conv3d_model(
             )
         ],
         path.stem,
-        [
-            helper.make_tensor_value_info(
-                "input", TensorProto.FLOAT, input_shape
-            )
-        ],
-        [
-            helper.make_tensor_value_info(
-                "output", TensorProto.FLOAT, output_shape
-            )
-        ],
+        [helper.make_tensor_value_info("input", TensorProto.FLOAT, input_shape)],
+        [helper.make_tensor_value_info("output", TensorProto.FLOAT, output_shape)],
         [weight, bias],
     )
     model = helper.make_model(
@@ -123,9 +110,7 @@ def make_supported_projection(source: Path, path: Path) -> None:
         )
     )
     extracted.graph.output.append(
-        helper.make_tensor_value_info(
-            "supported_output", TensorProto.FLOAT, [1, total]
-        )
+        helper.make_tensor_value_info("supported_output", TensorProto.FLOAT, [1, total])
     )
     extracted.graph.name = "conv_many_3_4_5d_supported_projection"
     save_model(extracted, path)

@@ -18,12 +18,10 @@ public:
       ConversionPatternRewriter &rewriter) const override {
     auto inputType = dyn_cast<RankedTensorType>(op.getInput().getType());
     auto resultType = dyn_cast<RankedTensorType>(op.getOutput().getType());
-    auto conditionConstant =
-        op.getCondition().getDefiningOp<ONNXConstantOp>();
-    auto condition = conditionConstant
-                         ? dyn_cast_or_null<ElementsAttr>(
-                               conditionConstant.getValueAttr())
-                         : ElementsAttr();
+    auto conditionConstant = op.getCondition().getDefiningOp<ONNXConstantOp>();
+    auto condition = conditionConstant ? dyn_cast_or_null<ElementsAttr>(
+                                             conditionConstant.getValueAttr())
+                                       : ElementsAttr();
     if (!inputType || !resultType || !inputType.hasStaticShape() ||
         !resultType.hasStaticShape() || !inputType.getElementType().isF32() ||
         !resultType.getElementType().isF32() || !condition)
@@ -123,8 +121,8 @@ public:
     for (int64_t matrix = 0; matrix < matrices; ++matrix)
       for (int64_t row = 0; row < rows; ++row)
         for (int64_t column = 0; column < columns; ++column) {
-          bool keep = upper ? column - row >= diagonal
-                            : column - row <= diagonal;
+          bool keep =
+              upper ? column - row >= diagonal : column - row <= diagonal;
           mask.push_back(keep ? 1.0f : 0.0f);
         }
     Value maskValue = arith::ConstantOp::create(rewriter, op.getLoc(),

@@ -21,12 +21,11 @@ public:
       ConversionPatternRewriter &rewriter) const override {
     auto signalType = dyn_cast<RankedTensorType>(op.getSignal().getType());
     auto resultType = dyn_cast<RankedTensorType>(op.getOutput().getType());
-    bool supportedSignalRank = signalType &&
-                               (signalType.getRank() == 2 ||
-                                   (signalType.getRank() == 3 &&
-                                       signalType.getShape().back() == 1));
-    if (!supportedSignalRank || !resultType ||
-        resultType.getRank() != 4 ||
+    bool supportedSignalRank =
+        signalType &&
+        (signalType.getRank() == 2 ||
+            (signalType.getRank() == 3 && signalType.getShape().back() == 1));
+    if (!supportedSignalRank || !resultType || resultType.getRank() != 4 ||
         failed(validateStaticF32Tensor(op, signalType, "STFT signal")) ||
         failed(validateStaticF32Tensor(op, resultType, "STFT result")))
       return op.emitError("ONNXToTFL STFT requires a static rank-2 real FP32 "
@@ -63,8 +62,8 @@ public:
     Location loc = op.getLoc();
     Value signal = adaptor.getSignal();
     if (signalType.getRank() == 3) {
-      auto realSignalType = RankedTensorType::get(
-          {batch, signalLength}, rewriter.getF32Type());
+      auto realSignalType =
+          RankedTensorType::get({batch, signalLength}, rewriter.getF32Type());
       Value realSignalShape =
           createI32ShapeConstant(rewriter, loc, {batch, signalLength});
       signal = createTFLOperation(rewriter, loc, "tfl.reshape",

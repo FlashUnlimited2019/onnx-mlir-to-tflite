@@ -23,7 +23,8 @@ public:
     auto resultType = dyn_cast<RankedTensorType>(op.getY().getType());
     if (!inputType || !resultType ||
         failed(validateStaticF32TensorOrScalar(op, inputType, "Ceil input")) ||
-        failed(validateStaticF32TensorOrScalar(op, resultType, "Ceil result")) ||
+        failed(
+            validateStaticF32TensorOrScalar(op, resultType, "Ceil result")) ||
         inputType != resultType)
       return op.emitError("ONNXToTFL Ceil requires matching static f32 "
                           "input/result tensors"),
@@ -112,10 +113,10 @@ public:
     Value zero = createF32ScalarTensorConstant(rewriter, loc, 0.0f);
     SmallVector<NamedAttribute> attributes{rewriter.getNamedAttr(
         "axis", rewriter.getI32IntegerAttr(static_cast<int32_t>(axis)))};
-    Value result = createTFLOperation(rewriter, loc, "tfl.one_hot",
-        TypeRange{resultType},
-        ValueRange{indices, depthValue, one, zero}, attributes)
-                       ->getResult(0);
+    Value result =
+        createTFLOperation(rewriter, loc, "tfl.one_hot", TypeRange{resultType},
+            ValueRange{indices, depthValue, one, zero}, attributes)
+            ->getResult(0);
     if (rank == 4) {
       Type physicalResultType = convertRank4NCHWToNHWCType(resultType);
       Value permutation = createI32ShapeConstant(rewriter, loc, {0, 2, 3, 1});

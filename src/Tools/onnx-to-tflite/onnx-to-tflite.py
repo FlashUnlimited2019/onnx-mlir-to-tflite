@@ -39,8 +39,14 @@ def _find_tool(name: str, explicit: str | None, script: Path) -> Path:
         for ancestor in (bin_dir, *bin_dir.parents):
             candidates.extend(
                 [
-                    ancestor / "tensorflow" / "bazel-bin" / "tensorflow"
-                    / "compiler" / "mlir" / "lite" / tensorflow_tool,
+                    ancestor
+                    / "tensorflow"
+                    / "bazel-bin"
+                    / "tensorflow"
+                    / "compiler"
+                    / "mlir"
+                    / "lite"
+                    / tensorflow_tool,
                     ancestor / "build" / "tensorflow" / tensorflow_tool,
                 ]
             )
@@ -64,15 +70,16 @@ def _run(command: list[str], stage: str) -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Lower a static FP32 ONNX model through MLIR to TFLite")
+        description="Lower a static FP32 ONNX model through MLIR to TFLite"
+    )
     parser.add_argument("input", type=Path, help="input .onnx model")
     parser.add_argument("-o", "--output", required=True, type=Path)
     parser.add_argument("--onnx-mlir", help="path to the onnx-mlir binary")
     parser.add_argument("--onnx-mlir-opt", help="path to onnx-mlir-opt")
     parser.add_argument(
-        "--flatbuffer-translate", help="path to TensorFlow flatbuffer_translate")
-    parser.add_argument(
-        "--litert-opt", help="path to TensorFlow litert-opt")
+        "--flatbuffer-translate", help="path to TensorFlow flatbuffer_translate"
+    )
+    parser.add_argument("--litert-opt", help="path to TensorFlow litert-opt")
     parser.add_argument(
         "--optimize-tfl",
         action=argparse.BooleanOptionalAction,
@@ -83,7 +90,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dump-tfl-mlir", action="store_true")
     parser.add_argument("--keep-intermediate-files", action="store_true")
     parser.add_argument(
-        "--verify-each", action=argparse.BooleanOptionalAction, default=True)
+        "--verify-each", action=argparse.BooleanOptionalAction, default=True
+    )
     parser.add_argument(
         "--use-buffer-offset",
         action=argparse.BooleanOptionalAction,
@@ -105,8 +113,7 @@ def _should_use_buffer_offset(input_path: Path) -> bool:
         input_path.with_suffix(".data"),
     }
     total_size = sum(
-        candidate.stat().st_size for candidate in candidates
-        if candidate.is_file()
+        candidate.stat().st_size for candidate in candidates if candidate.is_file()
     )
     # TensorFlow begins automatically switching near this threshold. Detect it
     # before conversion too, so intermediate files avoid the size-limited /tmp
@@ -139,8 +146,7 @@ def main() -> int:
 
     try:
         onnx_mlir = _find_tool("onnx-mlir", args.onnx_mlir, script)
-        onnx_mlir_opt = _find_tool(
-            "onnx-mlir-opt", args.onnx_mlir_opt, script)
+        onnx_mlir_opt = _find_tool("onnx-mlir-opt", args.onnx_mlir_opt, script)
         flatbuffer_translate = _find_tool(
             "flatbuffer_translate",
             args.flatbuffer_translate or os.environ.get("FLATBUFFER_TRANSLATE"),
@@ -266,12 +272,15 @@ def main() -> int:
         # crosses a filesystem boundary (the work directory is usually /tmp).
         staged_path: Path | None = None
         try:
-            with flatbuffer_path.open("rb") as source, tempfile.NamedTemporaryFile(
-                mode="wb",
-                prefix=f".{output_path.name}.",
-                dir=output_path.parent,
-                delete=False,
-            ) as staged:
+            with (
+                flatbuffer_path.open("rb") as source,
+                tempfile.NamedTemporaryFile(
+                    mode="wb",
+                    prefix=f".{output_path.name}.",
+                    dir=output_path.parent,
+                    delete=False,
+                ) as staged,
+            ):
                 shutil.copyfileobj(source, staged)
                 staged_path = Path(staged.name)
             os.replace(staged_path, output_path)

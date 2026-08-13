@@ -379,8 +379,7 @@ public:
       rewriter.replaceOp(op, elu->getResults());
       return success();
     }
-    Value zero =
-        createF32ScalarTensorConstant(rewriter, op.getLoc(), 0.0f);
+    Value zero = createF32ScalarTensorConstant(rewriter, op.getLoc(), 0.0f);
     Value one = createF32ScalarTensorConstant(rewriter, op.getLoc(), 1.0f);
     Value alphaValue =
         createF32ScalarTensorConstant(rewriter, op.getLoc(), alpha);

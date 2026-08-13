@@ -39,14 +39,14 @@ public:
     ArrayRef<int64_t> inputShape = sourceType.getShape();
     ArrayRef<int64_t> outputShape = sourceResultType.getShape();
     if (sourceType.getRank() != 4) {
-      bool halfPixel = adaptor.getCoordinateTransformationMode() == "half_pixel";
+      bool halfPixel =
+          adaptor.getCoordinateTransformationMode() == "half_pixel";
       bool asymmetric =
           adaptor.getCoordinateTransformationMode() == "asymmetric";
       bool roundPreferFloor = adaptor.getNearestMode() == "round_prefer_floor";
       bool floorMode = adaptor.getNearestMode() == "floor";
       if (adaptor.getMode() != "nearest" ||
-          !((halfPixel && roundPreferFloor) ||
-              (asymmetric && floorMode)))
+          !((halfPixel && roundPreferFloor) || (asymmetric && floorMode)))
         return op.emitError("non-2D Resize supports nearest/half_pixel/"
                             "round_prefer_floor or nearest/asymmetric/floor"),
                failure();
@@ -72,9 +72,10 @@ public:
           double coordinate =
               halfPixel ? (static_cast<double>(outputIndex) + 0.5) / scale - 0.5
                         : static_cast<double>(outputIndex) / scale;
-          int64_t index = roundPreferFloor
-                              ? static_cast<int64_t>(std::ceil(coordinate - 0.5))
-                              : static_cast<int64_t>(std::floor(coordinate));
+          int64_t index =
+              roundPreferFloor
+                  ? static_cast<int64_t>(std::ceil(coordinate - 0.5))
+                  : static_cast<int64_t>(std::floor(coordinate));
           index = std::clamp(index, int64_t{0}, inputExtent - 1);
           indices.push_back(static_cast<int32_t>(index));
         }
@@ -86,10 +87,8 @@ public:
         auto nextType =
             RankedTensorType::get(currentShape, rewriter.getF32Type());
         SmallVector<NamedAttribute> attributes{
-            rewriter.getNamedAttr(
-                "axis", rewriter.getI32IntegerAttr(axis)),
-            rewriter.getNamedAttr(
-                "batch_dims", rewriter.getI32IntegerAttr(0))};
+            rewriter.getNamedAttr("axis", rewriter.getI32IntegerAttr(axis)),
+            rewriter.getNamedAttr("batch_dims", rewriter.getI32IntegerAttr(0))};
         result = createTFLOperation(rewriter, op.getLoc(), "tfl.gather",
             TypeRange{nextType}, ValueRange{result, indicesValue}, attributes)
                      ->getResult(0);
@@ -140,10 +139,8 @@ public:
         auto nextType =
             RankedTensorType::get(currentShape, rewriter.getF32Type());
         SmallVector<NamedAttribute> attributes{
-            rewriter.getNamedAttr(
-                "axis", rewriter.getI32IntegerAttr(axis)),
-            rewriter.getNamedAttr(
-                "batch_dims", rewriter.getI32IntegerAttr(0))};
+            rewriter.getNamedAttr("axis", rewriter.getI32IntegerAttr(axis)),
+            rewriter.getNamedAttr("batch_dims", rewriter.getI32IntegerAttr(0))};
         result = createTFLOperation(rewriter, op.getLoc(), "tfl.gather",
             TypeRange{nextType}, ValueRange{result, indicesValue}, attributes)
                      ->getResult(0);

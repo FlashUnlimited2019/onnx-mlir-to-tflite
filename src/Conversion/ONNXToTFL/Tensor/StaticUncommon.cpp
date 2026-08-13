@@ -54,7 +54,8 @@ public:
     auto inputType = dyn_cast<RankedTensorType>(op.getInputData().getType());
     auto resultType = dyn_cast<RankedTensorType>(op.getOutputData().getType());
     if (!inputType || !resultType || inputType.getRank() < 1 ||
-        inputType.getRank() > 5 || inputType.getRank() != resultType.getRank() ||
+        inputType.getRank() > 5 ||
+        inputType.getRank() != resultType.getRank() ||
         failed(validateStaticF32Tensor(op, inputType, "CenterCropPad input")) ||
         failed(validateStaticF32Tensor(op, resultType, "CenterCropPad result")))
       return failure();
@@ -91,10 +92,9 @@ public:
     }
 
     Location loc = op.getLoc();
-    Value result = restoreLogicalRank4(
-        rewriter, loc, adaptor.getInputData(), inputType);
-    auto croppedType =
-        RankedTensorType::get(cropSize, rewriter.getF32Type());
+    Value result =
+        restoreLogicalRank4(rewriter, loc, adaptor.getInputData(), inputType);
+    auto croppedType = RankedTensorType::get(cropSize, rewriter.getF32Type());
     if (needsCrop) {
       Value begin = createI32ShapeConstant(rewriter, loc, cropBegin);
       Value size = createI32ShapeConstant(rewriter, loc, cropSize);
@@ -105,8 +105,8 @@ public:
     if (needsPad) {
       auto paddingType =
           RankedTensorType::get({rank, 2}, rewriter.getI32Type());
-      Value paddingValue = arith::ConstantOp::create(rewriter, loc,
-          paddingType, DenseIntElementsAttr::get(paddingType, paddings));
+      Value paddingValue = arith::ConstantOp::create(rewriter, loc, paddingType,
+          DenseIntElementsAttr::get(paddingType, paddings));
       Value zero = createF32ScalarTensorConstant(rewriter, loc, 0.0f);
       result = createTFLOperation(rewriter, loc, "tfl.padv2",
           TypeRange{resultType}, ValueRange{result, paddingValue, zero})
@@ -138,9 +138,9 @@ public:
       if (column >= 0 && column < columns)
         values[row * columns + column] = 1.0f;
     }
-    rewriter.replaceOp(op,
-        arith::ConstantOp::create(rewriter, op.getLoc(), resultType,
-            DenseFPElementsAttr::get(resultType, values)));
+    rewriter.replaceOp(
+        op, arith::ConstantOp::create(rewriter, op.getLoc(), resultType,
+                DenseFPElementsAttr::get(resultType, values)));
     return success();
   }
 };
@@ -167,12 +167,10 @@ public:
                           "spatial shapes"),
              failure();
     int64_t spatialRank = imageShape->size();
-    SmallVector<int64_t> strides =
-        integerArray(op, "strides", spatialRank, 1);
+    SmallVector<int64_t> strides = integerArray(op, "strides", spatialRank, 1);
     SmallVector<int64_t> dilations =
         integerArray(op, "dilations", spatialRank, 1);
-    SmallVector<int64_t> pads =
-        integerArray(op, "pads", 2 * spatialRank, 0);
+    SmallVector<int64_t> pads = integerArray(op, "pads", 2 * spatialRank, 0);
     if (strides.size() != static_cast<size_t>(spatialRank) ||
         dilations.size() != static_cast<size_t>(spatialRank) ||
         pads.size() != static_cast<size_t>(2 * spatialRank) ||
@@ -220,12 +218,12 @@ public:
         int64_t kernelCoordinate = outputIndex[i + 2] % (*blockShape)[i];
         int64_t positionCoordinate = outputIndex[i + 2] / (*blockShape)[i];
         kernelIndex = kernelIndex * (*blockShape)[i] + kernelCoordinate;
-        positionIndex =
-            positionIndex * positionShape[i] + positionCoordinate;
+        positionIndex = positionIndex * positionShape[i] + positionCoordinate;
       }
       int64_t inputChannel = outputIndex[1] * kernelElements + kernelIndex;
       int64_t inputLinear =
-          (outputIndex[0] * inputType.getShape()[1] + inputChannel) * positions +
+          (outputIndex[0] * inputType.getShape()[1] + inputChannel) *
+              positions +
           positionIndex;
       permutationIndices.push_back(static_cast<int32_t>(inputLinear));
     }
@@ -311,8 +309,8 @@ public:
             int64_t base = n * 6;
             grid.push_back((*theta)[base] * px + (*theta)[base + 1] * py +
                            (*theta)[base + 2]);
-            grid.push_back((*theta)[base + 3] * px +
-                           (*theta)[base + 4] * py + (*theta)[base + 5]);
+            grid.push_back((*theta)[base + 3] * px + (*theta)[base + 4] * py +
+                           (*theta)[base + 5]);
           }
     } else {
       int64_t depth = (*size)[2], height = (*size)[3], width = (*size)[4];
@@ -325,10 +323,9 @@ public:
               int64_t base = n * 12;
               for (int64_t row = 0; row < 3; ++row) {
                 int64_t offset = base + row * 4;
-                grid.push_back((*theta)[offset] * px +
-                               (*theta)[offset + 1] * py +
-                               (*theta)[offset + 2] * pz +
-                               (*theta)[offset + 3]);
+                grid.push_back(
+                    (*theta)[offset] * px + (*theta)[offset + 1] * py +
+                    (*theta)[offset + 2] * pz + (*theta)[offset + 3]);
               }
             }
     }

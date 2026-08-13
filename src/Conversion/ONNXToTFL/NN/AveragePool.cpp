@@ -267,7 +267,7 @@ public:
       SmallVector<Value> nextPieces;
       nextPieces.reserve(pieces.size() / extent);
       for (int64_t offset = 0, e = pieces.size(); offset < e;
-          offset += extent) {
+           offset += extent) {
         if (extent == 1) {
           nextPieces.push_back(pieces[offset]);
           continue;

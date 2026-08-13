@@ -295,8 +295,8 @@ struct RecomposeLayerNormFromMulPattern : public OpRewritePattern<ONNXMulOp> {
             "RMS epsilon needs to be a scalar floating-point constant");
       double epsilon =
           onnx_mlir::getScalarValue<double>(denseValue, denseValue.getType());
-      epsilonAttr = FloatAttr::get(
-          Float32Type::get(epsilonOp.getContext()), epsilon);
+      epsilonAttr =
+          FloatAttr::get(Float32Type::get(epsilonOp.getContext()), epsilon);
     }
     // Check axes.
     if (!hasShapeAndRank(dd))

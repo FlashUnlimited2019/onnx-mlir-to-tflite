@@ -402,7 +402,7 @@ private:
     SmallVector<Value> outputs(timesteps.size());
 
     for (int64_t iteration = 0, end = static_cast<int64_t>(timesteps.size());
-        iteration < end; ++iteration) {
+         iteration < end; ++iteration) {
       int64_t timestep = reverse ? end - 1 - iteration : iteration;
       Value inputProjection = createBatchMatMul(loc, timesteps[timestep],
           parameters.inputWeights, gatesType, rewriter);

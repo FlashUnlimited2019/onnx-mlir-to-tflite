@@ -31,7 +31,9 @@ def report_mismatch(name: str, expected: np.ndarray, actual: np.ndarray) -> None
     rel_index = np.unravel_index(int(np.argmax(relative)), relative.shape)
     print(f"output {name} mismatch", file=sys.stderr)
     print(f"  max absolute error: {abs_error[index]} at {index}", file=sys.stderr)
-    print(f"  max relative error: {relative[rel_index]} at {rel_index}", file=sys.stderr)
+    print(
+        f"  max relative error: {relative[rel_index]} at {rel_index}", file=sys.stderr
+    )
     print(f"  ONNX value at max abs: {expected[index]}", file=sys.stderr)
     print(f"  TFLite value at max abs: {actual[index]}", file=sys.stderr)
     print(f"  ONNX output:\n{expected}", file=sys.stderr)
@@ -45,7 +47,9 @@ def main() -> int:
     ort_inputs: dict[str, np.ndarray] = {}
     for item in session.get_inputs():
         if any(not isinstance(dim, int) or dim <= 0 for dim in item.shape):
-            raise ValueError(f"test expects a static positive input shape: {item.name} {item.shape}")
+            raise ValueError(
+                f"test expects a static positive input shape: {item.name} {item.shape}"
+            )
         if item.type != "tensor(float)":
             raise ValueError(f"test only supports FP32 inputs: {item.name} {item.type}")
         ort_inputs[item.name] = rng.normal(0.0, 0.5, item.shape).astype(np.float32)
@@ -68,7 +72,8 @@ def main() -> int:
         interpreter.set_tensor(tfl_input["index"], value)
     interpreter.invoke()
     tfl_outputs = [
-        interpreter.get_tensor(detail["index"]) for detail in interpreter.get_output_details()
+        interpreter.get_tensor(detail["index"])
+        for detail in interpreter.get_output_details()
     ]
 
     if len(ort_outputs) != len(tfl_outputs):
@@ -76,7 +81,9 @@ def main() -> int:
             f"output count differs: ONNX={len(ort_outputs)}, TFLite={len(tfl_outputs)}"
         )
     failed = False
-    for metadata, expected, actual in zip(session.get_outputs(), ort_outputs, tfl_outputs):
+    for metadata, expected, actual in zip(
+        session.get_outputs(), ort_outputs, tfl_outputs
+    ):
         if expected.shape != actual.shape:
             print(
                 f"output {metadata.name} shape differs: ONNX={expected.shape}, "

@@ -112,8 +112,8 @@ public:
             op, adaptor.getData().getType(), "ScatterElements data")) ||
         failed(validateStaticF32Tensor(
             op, adaptor.getUpdates().getType(), "ScatterElements updates")) ||
-        failed(validateStaticF32Tensor(
-            op, resultType, "ScatterElements result")))
+        failed(
+            validateStaticF32Tensor(op, resultType, "ScatterElements result")))
       return failure();
 
     int64_t rank = dataType.getRank();
@@ -143,8 +143,7 @@ public:
       if (dataShape[dimension] <= 0 || indicesShape[dimension] <= 0 ||
           dataShape[dimension] > std::numeric_limits<int32_t>::max() ||
           indicesShape[dimension] > std::numeric_limits<int32_t>::max() ||
-          (dimension != axis &&
-              indicesShape[dimension] > dataShape[dimension]))
+          (dimension != axis && indicesShape[dimension] > dataShape[dimension]))
         return op.emitError("unsupported ScatterElements static dimensions"),
                failure();
     }
@@ -175,16 +174,16 @@ public:
     Value zeroIndex = createI32ScalarTensorConstant(rewriter, loc, 0);
     Value axisExtent = createI32ScalarTensorConstant(
         rewriter, loc, static_cast<int32_t>(dataShape[axis]));
-    auto negativeType = RankedTensorType::get(
-        comparisonType.getShape(), rewriter.getI1Type());
+    auto negativeType =
+        RankedTensorType::get(comparisonType.getShape(), rewriter.getI1Type());
     Value negative = createTFLOperation(rewriter, loc, "tfl.less",
         TypeRange{negativeType}, ValueRange{comparisonIndices, zeroIndex})
                          ->getResult(0);
     SmallVector<NamedAttribute> fusedNone{getFusedActivationNone(rewriter)};
-    Value wrapped = createTFLOperation(rewriter, loc, "tfl.add",
-        TypeRange{comparisonType}, ValueRange{comparisonIndices, axisExtent},
-        fusedNone)
-                        ->getResult(0);
+    Value wrapped =
+        createTFLOperation(rewriter, loc, "tfl.add", TypeRange{comparisonType},
+            ValueRange{comparisonIndices, axisExtent}, fusedNone)
+            ->getResult(0);
     comparisonIndices = createTFLOperation(rewriter, loc, "tfl.select_v2",
         TypeRange{comparisonType},
         ValueRange{negative, wrapped, comparisonIndices})
@@ -228,10 +227,9 @@ public:
         }
         values.push_back(static_cast<int32_t>(position[dimension]));
       }
-      components.push_back(
-          arith::ConstantOp::create(rewriter, loc, componentType,
-              DenseIntElementsAttr::get(
-                  componentType, ArrayRef<int32_t>(values))));
+      components.push_back(arith::ConstantOp::create(rewriter, loc,
+          componentType,
+          DenseIntElementsAttr::get(componentType, ArrayRef<int32_t>(values))));
     }
     SmallVector<int64_t> coordinateShape(indicesShape);
     coordinateShape.push_back(rank);

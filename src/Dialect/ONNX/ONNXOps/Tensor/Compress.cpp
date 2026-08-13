@@ -96,8 +96,7 @@ LogicalResult ONNXCompressOpShapeHelper::computeShape() {
   }
 
   // A non-constant condition remains dynamic and must not be refined away.
-  setOutputDims(
-      outputDims, /*n*/ 0, /*refineShape*/ hasStaticCompressedDim);
+  setOutputDims(outputDims, /*n*/ 0, /*refineShape*/ hasStaticCompressedDim);
   return success();
 }
 
