@@ -150,6 +150,216 @@ public:
   }
 };
 
+class LpNormalizationLowering final
+    : public OpConversionPattern<ONNXLpNormalizationOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(ONNXLpNormalizationOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto inputType = dyn_cast<RankedTensorType>(op.getInput().getType());
+    auto resultType = dyn_cast<RankedTensorType>(op.getOutput().getType());
+    if (!inputType || !resultType || !inputType.hasStaticShape() ||
+        !resultType.hasStaticShape() || !inputType.getElementType().isF32() ||
+        inputType != resultType || inputType.getRank() < 1)
+      return op.emitError(
+                 "ONNXToTFL LpNormalization requires matching static f32 "
+                 "input/result tensors"),
+             failure();
+    if (op.getP() != 1 && op.getP() != 2)
+      return op.emitError("ONNXToTFL LpNormalization supports p=1 or p=2"),
+             failure();
+
+    int64_t rank = inputType.getRank();
+    int64_t axis = normalizeAxis(op.getAxis(), rank);
+    if (axis < 0 || axis >= rank)
+      return op.emitError("LpNormalization axis is out of range"), failure();
+
+    SmallVector<int64_t> normShape(inputType.getShape());
+    normShape[axis] = 1;
+    auto logicalNormType =
+        RankedTensorType::get(normShape, inputType.getElementType());
+    auto physicalInputType =
+        cast<RankedTensorType>(convertRank4NCHWToNHWCType(inputType));
+    auto physicalNormType =
+        cast<RankedTensorType>(convertRank4NCHWToNHWCType(logicalNormType));
+    auto physicalResultType =
+        cast<RankedTensorType>(convertRank4NCHWToNHWCType(resultType));
+    if (rank == 4)
+      axis = mapNCHWAxisToNHWC(axis);
+
+    Location loc = op.getLoc();
+    Value magnitude;
+    if (op.getP() == 1) {
+      magnitude = createTFLOperation(rewriter, loc, "tfl.abs",
+          TypeRange{physicalInputType}, ValueRange{adaptor.getInput()})
+                      ->getResult(0);
+    } else {
+      SmallVector<NamedAttribute> mulAttributes{rewriter.getNamedAttr(
+          "fused_activation_function", rewriter.getStringAttr("NONE"))};
+      magnitude = createTFLOperation(rewriter, loc, "tfl.mul",
+          TypeRange{physicalInputType},
+          ValueRange{adaptor.getInput(), adaptor.getInput()}, mulAttributes)
+                      ->getResult(0);
+    }
+    Value axisValue = createI32ShapeConstant(rewriter, loc, {axis});
+    SmallVector<NamedAttribute> sumAttributes{
+        rewriter.getNamedAttr("keep_dims", rewriter.getBoolAttr(true))};
+    Value norm = createTFLOperation(rewriter, loc, "tfl.sum",
+        TypeRange{physicalNormType}, ValueRange{magnitude, axisValue},
+        sumAttributes)
+                     ->getResult(0);
+    if (op.getP() == 2)
+      norm = createTFLOperation(rewriter, loc, "tfl.sqrt",
+          TypeRange{physicalNormType}, ValueRange{norm})
+                 ->getResult(0);
+
+    Value zero = arith::ConstantOp::create(rewriter, loc, physicalNormType,
+        DenseElementsAttr::get(physicalNormType, 0.0f));
+    Value one = arith::ConstantOp::create(rewriter, loc, physicalNormType,
+        DenseElementsAttr::get(physicalNormType, 1.0f));
+    auto conditionType = RankedTensorType::get(
+        physicalNormType.getShape(), rewriter.getI1Type());
+    Value normIsZero = createTFLOperation(rewriter, loc, "tfl.equal",
+        TypeRange{conditionType}, ValueRange{norm, zero})
+                           ->getResult(0);
+    Value safeNorm = createTFLOperation(rewriter, loc, "tfl.select_v2",
+        TypeRange{physicalNormType}, ValueRange{normIsZero, one, norm})
+                         ->getResult(0);
+    SmallVector<NamedAttribute> divAttributes{rewriter.getNamedAttr(
+        "fused_activation_function", rewriter.getStringAttr("NONE"))};
+    Value normalized = createTFLOperation(rewriter, loc, "tfl.div",
+        TypeRange{physicalResultType}, ValueRange{adaptor.getInput(), safeNorm},
+        divAttributes)
+                           ->getResult(0);
+    rewriter.replaceOp(op, normalized);
+    return success();
+  }
+};
+
+enum class StaticReductionKind { L1, LogSumExp, Prod, SumSquare };
+
+template <typename ONNXOp, StaticReductionKind kind>
+class StaticReductionLowering final : public OpConversionPattern<ONNXOp> {
+public:
+  using OpConversionPattern<ONNXOp>::OpConversionPattern;
+  using OpAdaptor = typename ONNXOp::Adaptor;
+
+  LogicalResult matchAndRewrite(ONNXOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto inputType = dyn_cast<RankedTensorType>(op.getData().getType());
+    auto resultType = dyn_cast<RankedTensorType>(op.getReduced().getType());
+    if (!inputType || !resultType || !inputType.hasStaticShape() ||
+        !resultType.hasStaticShape() || !inputType.getElementType().isF32() ||
+        !resultType.getElementType().isF32() || inputType.getRank() < 1)
+      return op.emitError(
+                 "ONNXToTFL reduction requires static ranked f32 tensors"),
+             failure();
+
+    bool axesAbsent = isa<NoneType>(op.getAxes().getType());
+    SmallVector<int64_t> axes;
+    if (!axesAbsent) {
+      FailureOr<SmallVector<int64_t>> values =
+          getConstantIntValues(op.getAxes());
+      if (failed(values))
+        return op.emitError("ONNXToTFL reduction requires constant axes"),
+               failure();
+      axes = std::move(*values);
+    }
+    if ((axesAbsent || axes.empty()) && op.getNoopWithEmptyAxes() != 0) {
+      rewriter.replaceOp(op, adaptor.getData());
+      return success();
+    }
+    int64_t rank = inputType.getRank();
+    if (axesAbsent || axes.empty())
+      for (int64_t axis = 0; axis < rank; ++axis)
+        axes.push_back(axis);
+    SmallVector<bool> seen(rank, false);
+    for (int64_t &rawAxis : axes) {
+      int64_t axis = normalizeAxis(rawAxis, rank);
+      if (axis < 0 || axis >= rank || seen[axis])
+        return op.emitError() << "invalid reduction axis " << rawAxis,
+               failure();
+      seen[axis] = true;
+      rawAxis = axis;
+    }
+
+    Location loc = op.getLoc();
+    bool keepDims = op.getKeepdims() != 0;
+    Value input =
+        restoreLogicalRank4(rewriter, loc, adaptor.getData(), inputType);
+    Value axisValue = createI32ShapeConstant(rewriter, loc, axes);
+    SmallVector<NamedAttribute> resultReductionAttributes{
+        rewriter.getNamedAttr("keep_dims", rewriter.getBoolAttr(keepDims))};
+    SmallVector<NamedAttribute> binaryAttributes{rewriter.getNamedAttr(
+        "fused_activation_function", rewriter.getStringAttr("NONE"))};
+
+    Value result;
+    if constexpr (kind == StaticReductionKind::L1) {
+      Value magnitude = createTFLOperation(
+          rewriter, loc, "tfl.abs", TypeRange{inputType}, ValueRange{input})
+                            ->getResult(0);
+      result =
+          createTFLOperation(rewriter, loc, "tfl.sum", TypeRange{resultType},
+              ValueRange{magnitude, axisValue}, resultReductionAttributes)
+              ->getResult(0);
+    } else if constexpr (kind == StaticReductionKind::Prod) {
+      result = createTFLOperation(rewriter, loc, "tfl.reduce_prod",
+          TypeRange{resultType}, ValueRange{input, axisValue},
+          resultReductionAttributes)
+                   ->getResult(0);
+    } else if constexpr (kind == StaticReductionKind::SumSquare) {
+      Value squared = createTFLOperation(rewriter, loc, "tfl.mul",
+          TypeRange{inputType}, ValueRange{input, input}, binaryAttributes)
+                          ->getResult(0);
+      result =
+          createTFLOperation(rewriter, loc, "tfl.sum", TypeRange{resultType},
+              ValueRange{squared, axisValue}, resultReductionAttributes)
+              ->getResult(0);
+    } else {
+      SmallVector<int64_t> keepShape(inputType.getShape());
+      for (int64_t axis : axes)
+        keepShape[axis] = 1;
+      auto keepType =
+          RankedTensorType::get(keepShape, inputType.getElementType());
+      SmallVector<NamedAttribute> keepReductionAttributes{
+          rewriter.getNamedAttr("keep_dims", rewriter.getBoolAttr(true))};
+      Value maximum = createTFLOperation(rewriter, loc, "tfl.reduce_max",
+          TypeRange{keepType}, ValueRange{input, axisValue},
+          keepReductionAttributes)
+                          ->getResult(0);
+      Value centered = createTFLOperation(rewriter, loc, "tfl.sub",
+          TypeRange{inputType}, ValueRange{input, maximum}, binaryAttributes)
+                           ->getResult(0);
+      Value exponentiated = createTFLOperation(
+          rewriter, loc, "tfl.exp", TypeRange{inputType}, ValueRange{centered})
+                                ->getResult(0);
+      Value sum =
+          createTFLOperation(rewriter, loc, "tfl.sum", TypeRange{keepType},
+              ValueRange{exponentiated, axisValue}, keepReductionAttributes)
+              ->getResult(0);
+      Value logarithm = createTFLOperation(
+          rewriter, loc, "tfl.log", TypeRange{keepType}, ValueRange{sum})
+                            ->getResult(0);
+      Value stabilized = createTFLOperation(rewriter, loc, "tfl.add",
+          TypeRange{keepType}, ValueRange{logarithm, maximum}, binaryAttributes)
+                             ->getResult(0);
+      if (keepDims) {
+        result = stabilized;
+      } else {
+        Value resultShape =
+            createI32ShapeConstant(rewriter, loc, resultType.getShape());
+        result = createTFLOperation(rewriter, loc, "tfl.reshape",
+            TypeRange{resultType}, ValueRange{stabilized, resultShape})
+                     ->getResult(0);
+      }
+    }
+
+    result = makePhysicalRank4(rewriter, loc, result, resultType);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 template <typename ONNXOp>
 class ReduceAttributeAxesLowering final : public OpConversionPattern<ONNXOp> {
 public:
@@ -304,8 +514,15 @@ public:
 void populateLoweringONNXAdditionalMathOpToTFLPatterns(
     RewritePatternSet &patterns, TypeConverter &typeConverter) {
   MLIRContext *context = patterns.getContext();
-  patterns.add<CumSumLowering, OneHotLowering, ReduceMaxInputAxesLowering,
-      IsNaNLowering, IsInfLowering>(typeConverter, context);
+  patterns.add<CumSumLowering, OneHotLowering, LpNormalizationLowering,
+      ReduceMaxInputAxesLowering, IsNaNLowering, IsInfLowering>(
+      typeConverter, context);
+  patterns.add<StaticReductionLowering<ONNXReduceL1Op, StaticReductionKind::L1>,
+      StaticReductionLowering<ONNXReduceLogSumExpOp,
+          StaticReductionKind::LogSumExp>,
+      StaticReductionLowering<ONNXReduceProdOp, StaticReductionKind::Prod>,
+      StaticReductionLowering<ONNXReduceSumSquareOp,
+          StaticReductionKind::SumSquare>>(typeConverter, context);
   patterns.add<ReduceAttributeAxesLowering<ONNXReduceMinV13Op>>(
       typeConverter, context, "tfl.reduce_min");
 }

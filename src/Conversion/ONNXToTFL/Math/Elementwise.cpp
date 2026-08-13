@@ -109,7 +109,9 @@ public:
 
     Type resultType = convertRank4NCHWToNHWCType(op->getResult(0).getType());
     SmallVector<Value> operands(adaptor.getOperands());
-    if (sourceResultType.getRank() > 5) {
+    bool isPow = tflName == "tfl.pow";
+    int64_t maximumBroadcastRank = isPow ? 4 : 5;
+    if (sourceResultType.getRank() > maximumBroadcastRank) {
       int64_t resultRank = sourceResultType.getRank();
       SmallVector<int64_t> lhsShape(resultRank, 1);
       SmallVector<int64_t> rhsShape(resultRank, 1);
@@ -176,7 +178,9 @@ public:
       operands[1] = reshapeOperand(operands[1], rhsType, reducedRhsShape);
       auto reducedResultType = RankedTensorType::get(
           reducedResultShape, sourceResultType.getElementType());
-      SmallVector<NamedAttribute> attributes{getFusedActivationNone(rewriter)};
+      SmallVector<NamedAttribute> attributes;
+      if (!isPow)
+        attributes.push_back(getFusedActivationNone(rewriter));
       Value reducedResult = createTFLOperation(rewriter, op.getLoc(), tflName,
           TypeRange{reducedResultType}, operands, attributes)
                                 ->getResult(0);
@@ -197,7 +201,9 @@ public:
         operands[i] = *adapted;
       }
     }
-    SmallVector<NamedAttribute> attributes{getFusedActivationNone(rewriter)};
+    SmallVector<NamedAttribute> attributes;
+    if (!isPow)
+      attributes.push_back(getFusedActivationNone(rewriter));
     Operation *newOp = createTFLOperation(rewriter, op.getLoc(), tflName,
         TypeRange{resultType}, operands, attributes);
     rewriter.replaceOp(op, newOp->getResults());
@@ -757,6 +763,8 @@ void populateLoweringONNXElementwiseOpToTFLPatterns(
       typeConverter, context, "tfl.mul");
   patterns.add<BinaryElementwiseLowering<ONNXDivOp>>(
       typeConverter, context, "tfl.div");
+  patterns.add<BinaryElementwiseLowering<ONNXPowOp>>(
+      typeConverter, context, "tfl.pow");
   patterns.add<VariadicMinMaxLowering<ONNXMinOp>>(
       typeConverter, context, "tfl.minimum");
   patterns.add<VariadicMinMaxLowering<ONNXMaxOp>>(

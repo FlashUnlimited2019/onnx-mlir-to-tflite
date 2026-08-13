@@ -270,14 +270,27 @@ public:
         failed(validateStaticF32Tensor(op, resultType, "result")))
       return failure();
     Value slope = adaptor.getSlope();
-    if (resultType.getRank() == 4 && slopeType.getRank() == 3) {
+    if (resultType.getRank() == 4 &&
+        (slopeType.getRank() == 3 || slopeType.getRank() == 4)) {
       ArrayRef<int64_t> shape = slopeType.getShape();
-      if (shape[1] != 1 || shape[2] != 1)
-        return op.emitError("rank-4 PRelu requires a [C,1,1] slope"), failure();
+      int64_t channelCount;
+      if (slopeType.getRank() == 3) {
+        if (shape[1] != 1 || shape[2] != 1)
+          return op.emitError("rank-4 PRelu requires a [C,1,1] or "
+                              "[1,C,1,1] slope"),
+                 failure();
+        channelCount = shape[0];
+      } else {
+        if (shape[0] != 1 || shape[2] != 1 || shape[3] != 1)
+          return op.emitError("rank-4 PRelu requires a [C,1,1] or "
+                              "[1,C,1,1] slope"),
+                 failure();
+        channelCount = shape[1];
+      }
       auto physicalSlopeType =
-          RankedTensorType::get({1, 1, shape[0]}, rewriter.getF32Type());
+          RankedTensorType::get({1, 1, channelCount}, rewriter.getF32Type());
       Value physicalShape =
-          createI32ShapeConstant(rewriter, op.getLoc(), {1, 1, shape[0]});
+          createI32ShapeConstant(rewriter, op.getLoc(), {1, 1, channelCount});
       slope = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
           TypeRange{physicalSlopeType}, ValueRange{slope, physicalShape})
                   ->getResult(0);

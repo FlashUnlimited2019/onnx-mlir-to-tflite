@@ -94,6 +94,8 @@ public:
 // The runtime indices may vary; only ranks and extents are compile-time data.
 // ONNX leaves duplicate-index ordering unspecified for reduction="none", so
 // ScatterNd's additive accumulation is valid for conforming unique-index uses.
+// For reduction="add", that accumulation directly implements the required
+// duplicate-index behavior.
 class ScatterElementsLowering final
     : public OpConversionPattern<ONNXScatterElementsOp> {
 public:
@@ -128,9 +130,10 @@ public:
                           "equal-rank rank-1 through rank-5 f32 tensors and "
                           "i32/i64 indices"),
              failure();
-    if (op.getReduction() != "none")
-      return op.emitError("ONNXToTFL general ScatterElements currently "
-                          "supports reduction=none only"),
+    bool additiveReduction = op.getReduction() == "add";
+    if (op.getReduction() != "none" && !additiveReduction)
+      return op.emitError("ONNXToTFL general ScatterElements supports "
+                          "reduction=none or reduction=add"),
              failure();
 
     int64_t axis = normalizeAxis(op.getAxis(), rank);
@@ -253,12 +256,15 @@ public:
     };
     Value data = restoreLogicalRank4(adaptor.getData(), dataType);
     Value updates = restoreLogicalRank4(adaptor.getUpdates(), updatesType);
-    Value oldValues = createTFLOperation(rewriter, loc, "tfl.gather_nd",
-        TypeRange{updatesType}, ValueRange{data, coordinates})
-                          ->getResult(0);
-    Value deltas = createTFLOperation(rewriter, loc, "tfl.sub",
-        TypeRange{updatesType}, ValueRange{updates, oldValues}, fusedNone)
-                       ->getResult(0);
+    Value deltas = updates;
+    if (!additiveReduction) {
+      Value oldValues = createTFLOperation(rewriter, loc, "tfl.gather_nd",
+          TypeRange{updatesType}, ValueRange{data, coordinates})
+                            ->getResult(0);
+      deltas = createTFLOperation(rewriter, loc, "tfl.sub",
+          TypeRange{updatesType}, ValueRange{updates, oldValues}, fusedNone)
+                   ->getResult(0);
+    }
     Value shape = createI32ShapeConstant(rewriter, loc, dataShape);
     Value sparseDeltas = createTFLOperation(rewriter, loc, "tfl.scatter_nd",
         TypeRange{dataType}, ValueRange{coordinates, deltas, shape})
