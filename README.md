@@ -3,7 +3,7 @@
 
 # ONNX-MLIR to TFLite
 
-ONNX-MLIR TFLite is an experimental compiler pipeline that converts static
+ONNX-MLIR to TFLite is an experimental compiler pipeline that converts static
 ONNX models directly to TensorFlow Lite FlatBuffers through MLIR. It is built
 as a downstream extension of [ONNX-MLIR](https://github.com/onnx/onnx-mlir)
 and reuses its ONNX importer, ONNX Dialect, shape inference, and
