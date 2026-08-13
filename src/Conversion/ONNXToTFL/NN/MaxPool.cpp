@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Copyright 2026 FlashUnlimited2019.
+
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
 #include <limits>
@@ -117,8 +119,7 @@ public:
         rewriter.getNamedAttr(
             "filter_height", rewriter.getI32IntegerAttr(kernel[0])),
         getFusedActivationNone(rewriter)};
-    Type convertedResultType =
-        this->getTypeConverter()->convertType(resultType);
+    Type convertedResultType = convertRank4NCHWToNHWCType(resultType);
     Operation *newOp =
         createTFLOperation(rewriter, op.getLoc(), "tfl.max_pool_2d",
             TypeRange{convertedResultType}, ValueRange{input}, attributes);

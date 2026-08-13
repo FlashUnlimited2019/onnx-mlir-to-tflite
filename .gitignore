@@ -1,6 +1,13 @@
+
+# Modified by FlashUnlimited2019 in 2026.
+
 .idea/
 cmake-*/
 CMakePresets.json
+CMakeUserPresets.json
+
+# Internal project notes
+/README-ONNX-TO-TFLITE-internal.md
 
 # Prerequisites
 *.d
@@ -41,6 +48,41 @@ CMakePresets.json
 
 # Nested build directory
 /build*
+
+# Bootstrap-managed toolchains and build state
+/.bazel-output/
+/.deps/
+/llvm-project/
+/tensorflow/
+
+# Accidental in-source CMake and Ninja build output
+/.ninja_deps
+/.ninja_log
+/CMakeCache.txt
+/CMakeFiles/
+/CTestTestfile.cmake
+/DartConfiguration.tcl
+/_deps/
+/build.ninja
+/cmake_install.cmake
+/compile_commands.json
+
+# ONNX-to-TFLite generated output and diagnostic dumps
+*.tflite
+*.tflite.intermediates/
+*.onnx.mlir
+*.tfl.mlir
+
+# Compiler diagnostics and crash output
+*.gcda
+*.gcno
+*.profdata
+*.profraw
+*.rej
+*.swp
+*.swo
+core
+core.*
 
 # The following .gitignore content is taken from
 # https://github.com/github/gitignore/blob/main/Python.gitignore

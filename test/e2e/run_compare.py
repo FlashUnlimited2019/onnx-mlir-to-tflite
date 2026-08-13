@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
 """Compare ONNX Runtime and TFLite Interpreter outputs."""
 
 from __future__ import annotations

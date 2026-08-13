@@ -2,13 +2,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Copyright 2026 FlashUnlimited2019.
+
 //===----- ConvertONNXToTFL.cpp - ONNX to TensorFlow Lite lowering -------===//
 
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
-#include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/IR/Verifier.h"
-#include "llvm/ADT/DenseSet.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 using namespace mlir;
 
@@ -17,10 +18,50 @@ namespace {
 
 bool isSupportedONNXOperation(Operation *op) {
   return isa<ONNXEntryPointOp, ONNXReturnOp, ONNXNoneOp, ONNXConstantOp,
-      ONNXIdentityOp, ONNXAddOp, ONNXSubOp, ONNXMulOp, ONNXDivOp, ONNXReluOp,
-      ONNXSigmoidOp, ONNXTanhOp, ONNXMatMulOp, ONNXGemmOp, ONNXReshapeOp,
-      ONNXTransposeOp, ONNXConcatOp, ONNXSoftmaxOp, ONNXConvOp,
-      ONNXMaxPoolSingleOutOp, ONNXReduceMeanV13Op>(op);
+             ONNXIdentityOp, ONNXAddOp, ONNXSubOp, ONNXMulOp, ONNXDivOp,
+             ONNXArgMaxOp, ONNXArgMinOp, ONNXCastOp, ONNXEqualOp, ONNXGreaterOp,
+             ONNXGreaterOrEqualOp, ONNXModOp, ONNXReluOp, ONNXSigmoidOp,
+             ONNXTanhOp, ONNXExpOp, ONNXSqrtOp, ONNXCosOp, ONNXSinOp, ONNXAbsOp,
+             ONNXNegOp, ONNXRoundOp, ONNXSignOp, ONNXFloorOp, ONNXCeilOp,
+             ONNXNotOp, ONNXHardmaxOp, ONNXReciprocalOp, ONNXBitShiftOp,
+             ONNXEluOp, ONNXLessOp, ONNXGeluOp, ONNXLogOp, ONNXPReluOp,
+             ONNXSeluOp, ONNXSoftplusOp, ONNXSoftsignOp, ONNXMeanOp, ONNXAndOp,
+             ONNXOrOp, ONNXXorOp, ONNXCumSumOp, ONNXOneHotOp, ONNXCeluOp,
+             ONNXThresholdedReluOp, ONNXAsinOp, ONNXAcosOp, ONNXAtanOp,
+             ONNXAtanhOp, ONNXSinhOp, ONNXCoshOp, ONNXAsinhOp, ONNXAcoshOp,
+             ONNXErfOp, ONNXIsInfOp, ONNXIsNaNOp, ONNXShrinkOp, ONNXIm2ColOp,
+             ONNXMeanVarianceNormalizationOp, ONNXMishOp, ONNXDFTOp, ONNXDetOp,
+             ONNXNegativeLogLikelihoodLossOp, ONNXMatMulOp, ONNXGemmOp,
+             ONNXTopKOp, ONNXSTFTOp, ONNXReshapeOp, ONNXTransposeOp,
+             ONNXConcatOp, ONNXExpandOp, ONNXSoftmaxOp, ONNXConvOp,
+             ONNXMaxPoolSingleOutOp, ONNXReduceMeanOp, ONNXReduceMeanV13Op,
+             ONNXReduceMaxOp, ONNXReduceMaxV13Op, ONNXReduceMinV13Op,
+             ONNXReduceSumOp, ONNXReduceSumV11Op, ONNXSliceOp, ONNXSplitOp,
+             ONNXResizeOp, ONNXPadOp, ONNXFlattenOp, ONNXGatherOp,
+             ONNXGatherElementsOp, ONNXScatterElementsOp, ONNXScatterNDOp,
+             ONNXSqueezeOp, ONNXUnsqueezeOp, ONNXTileOp, ONNXWhereOp,
+             ONNXGatherNDOp, ONNXClipOp, ONNXUpsampleAndPadOp,
+             ONNXDepthToSpaceOp, ONNXSpaceToDepthOp, ONNXMinOp, ONNXMaxOp,
+             ONNXLRNOp, ONNXLSTMOp, ONNXRNNOp, ONNXGRUOp, ONNXReverseSequenceOp,
+             ONNXGridSampleOp, ONNXMaxPoolOp, ONNXMaxUnpoolOp, ONNXCompressOp,
+             ONNXTriluOp, ONNXCenterCropPadOp, ONNXEyeLikeOp, ONNXCol2ImOp,
+             ONNXAffineGridOp, ONNXDeformConvOp, ONNXRoiAlignOp, ONNXLpPoolOp,
+             ONNXGlobalLpPoolOp, ONNXBatchNormalizationInferenceModeOp,
+             ONNXAttentionOp>(op) ||
+         isa<ONNXAveragePoolOp, ONNXHardSigmoidOp, ONNXHardSwishOp,
+             ONNXLayerNormalizationOp, ONNXRMSLayerNormalizationOp,
+             ONNXLeakyReluOp>(op) ||
+         ([](Operation *candidate) {
+           auto custom = dyn_cast<ONNXCustomOp>(candidate);
+           if (!custom)
+             return false;
+           auto domain = candidate->getAttrOfType<StringAttr>("domain_name");
+           if (!domain || domain.getValue() != "com.microsoft")
+             return false;
+           StringRef name = custom.getFunctionName();
+           return name == "Attention" || name == "MultiHeadAttention" ||
+                  name == "GroupQueryAttention";
+         })(op);
 }
 
 StringRef getONNXValueName(func::FuncOp function, unsigned index, bool result) {
@@ -47,7 +88,35 @@ std::string joinValueNames(func::FuncOp function, bool result) {
   return joined;
 }
 
-LogicalResult prepareEntryPoint(ModuleOp module, TypeConverter &typeConverter) {
+LogicalResult validateEntryInput(Operation *op, Type type) {
+  auto tensorType = dyn_cast<RankedTensorType>(type);
+  if (!tensorType) {
+    return op->emitError()
+           << "dynamic or unranked tensor shape is not supported by "
+              "ONNXToTFL MVP (function input)";
+  }
+  if (!tensorType.hasStaticShape()) {
+    return op->emitError()
+           << "dynamic tensor shape is not supported by ONNXToTFL MVP "
+              "(function input: "
+           << type << ")";
+  }
+  if (tensorType.getRank() < 1) {
+    return op->emitError()
+           << "ONNXToTFL MVP requires activation rank >= 1 (function input)";
+  }
+  Type elementType = tensorType.getElementType();
+  if (!elementType.isF32() && !elementType.isSignlessInteger(32) &&
+      !elementType.isSignlessInteger(64)) {
+    return op->emitError()
+           << "ONNXToTFL MVP only supports f32, i32, or i64 function input "
+              "tensors (function input: "
+           << type << ")";
+  }
+  return success();
+}
+
+LogicalResult prepareEntryPoint(ModuleOp module) {
   SmallVector<ONNXEntryPointOp> entryPoints;
   module.walk([&](ONNXEntryPointOp op) { entryPoints.push_back(op); });
   if (entryPoints.size() != 1) {
@@ -75,7 +144,7 @@ LogicalResult prepareEntryPoint(ModuleOp module, TypeConverter &typeConverter) {
   }
 
   for (Type type : function.getArgumentTypes()) {
-    if (failed(validateStaticF32Tensor(function, type, "function input")))
+    if (failed(validateEntryInput(function, type)))
       return failure();
   }
   for (Type type : function.getResultTypes()) {
@@ -84,19 +153,6 @@ LogicalResult prepareEntryPoint(ModuleOp module, TypeConverter &typeConverter) {
   }
 
   Builder builder(module.getContext());
-  SmallVector<Type> convertedInputs;
-  SmallVector<Type> convertedResults;
-  convertedInputs.reserve(function.getNumArguments());
-  convertedResults.reserve(function.getNumResults());
-  for (auto [index, type] : llvm::enumerate(function.getArgumentTypes())) {
-    Type converted = typeConverter.convertType(type);
-    convertedInputs.push_back(converted);
-    function.getArgument(index).setType(converted);
-  }
-  for (Type type : function.getResultTypes())
-    convertedResults.push_back(typeConverter.convertType(type));
-  function.setType(builder.getFunctionType(convertedInputs, convertedResults));
-
   SmallVector<NamedAttribute> entryAttributes{
       builder.getNamedAttr(
           "inputs", builder.getStringAttr(joinValueNames(function, false))),
@@ -108,6 +164,72 @@ LogicalResult prepareEntryPoint(ModuleOp module, TypeConverter &typeConverter) {
   function.setPublic();
   function.setName("main");
   entry.erase();
+  return success();
+}
+
+LogicalResult finalizeEntryPointTypes(ModuleOp module) {
+  func::FuncOp function = module.lookupSymbol<func::FuncOp>("main");
+  if (!function)
+    return module.emitError("ONNXToTFL entry function main is missing");
+
+  FunctionType oldType = function.getFunctionType();
+  SmallVector<Type> inputs;
+  SmallVector<Type> results;
+  inputs.reserve(oldType.getNumInputs());
+  results.reserve(oldType.getNumResults());
+  for (Type type : oldType.getInputs())
+    inputs.push_back(convertRank4NCHWToNHWCType(type));
+  for (Type type : oldType.getResults())
+    results.push_back(convertRank4NCHWToNHWCType(type));
+
+  // The conversion driver represents a converted entry argument with an
+  // unrealized cast because the surrounding function is deliberately kept
+  // legal during operation conversion. Retype the ABI argument to NHWC and
+  // remove that type-only boundary cast; no runtime Transpose is introduced.
+  for (auto [index, argument] : llvm::enumerate(function.getArguments())) {
+    Type convertedType = inputs[index];
+    if (argument.getType() == convertedType)
+      continue;
+    argument.setType(convertedType);
+    SmallVector<UnrealizedConversionCastOp> casts;
+    for (Operation *user : argument.getUsers())
+      if (auto cast = dyn_cast<UnrealizedConversionCastOp>(user))
+        casts.push_back(cast);
+    for (UnrealizedConversionCastOp cast : casts) {
+      if (cast.getInputs().size() != 1 || cast.getOutputs().size() != 1 ||
+          cast.getInputs().front() != argument ||
+          cast.getOutputs().front().getType() != convertedType)
+        continue;
+      cast.getOutputs().front().replaceAllUsesWith(argument);
+      cast.erase();
+    }
+  }
+  function.setType(FunctionType::get(module.getContext(), inputs, results));
+
+  SmallVector<UnrealizedConversionCastOp> remaining;
+  module.walk([&](UnrealizedConversionCastOp cast) {
+    if (cast.getInputs().size() != 1 || cast.getOutputs().size() != 1) {
+      remaining.push_back(cast);
+      return;
+    }
+    Value input = cast.getInputs().front();
+    Value output = cast.getOutputs().front();
+    Type inputType = input.getType();
+    Type outputType = output.getType();
+    if (inputType != outputType &&
+        inputType != convertRank4NCHWToNHWCType(outputType) &&
+        outputType != convertRank4NCHWToNHWCType(inputType)) {
+      remaining.push_back(cast);
+      return;
+    }
+    output.replaceAllUsesWith(input);
+    cast.erase();
+  });
+  if (!remaining.empty()) {
+    remaining.front().emitError(
+        "unresolved ONNXToTFL type materialization after ABI conversion");
+    return failure();
+  }
   return success();
 }
 
@@ -127,25 +249,22 @@ public:
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
-    llvm::DenseSet<Type> targetRank4Types;
-    module.walk([&](Operation *op) {
-      for (Type type :
-          llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes())) {
-        Type converted = convertRank4NCHWToNHWCType(type);
-        if (converted != type)
-          targetRank4Types.insert(converted);
-      }
-    });
-
     TypeConverter typeConverter;
     typeConverter.addConversion([](Type type) { return type; });
-    typeConverter.addConversion([&](RankedTensorType type) -> Type {
-      if (targetRank4Types.contains(type))
-        return type;
+    typeConverter.addConversion([](RankedTensorType type) -> Type {
       return convertRank4NCHWToNHWCType(type);
     });
 
-    if (failed(prepareEntryPoint(module, typeConverter))) {
+    if (failed(prepareEntryPoint(module))) {
+      signalPassFailure();
+      return;
+    }
+
+    RewritePatternSet preprocessingPatterns(&getContext());
+    populateONNXToTFLPreprocessingPatterns(preprocessingPatterns);
+    if (failed(
+            applyPatternsGreedily(module, std::move(preprocessingPatterns)))) {
+      module.emitError("ONNXToTFL preprocessing failed");
       signalPassFailure();
       return;
     }
@@ -167,30 +286,78 @@ public:
 
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
-    populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(
-        patterns, typeConverter);
-    populateReturnOpTypeConversionPattern(patterns, typeConverter);
     populateLoweringONNXElementwiseOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXAdditionalElementwiseOpToTFLPatterns(
+        patterns, typeConverter);
+    populateLoweringONNXAdditionalMathOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXUncommonMathOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXArgMaxOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXComparisonOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXLegacyMathOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXMatMulGemmOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXSoftmaxOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXTopKOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXConcatOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXConstantOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXCastOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXExpandOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXFlattenOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXGatherOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXGatherElementsOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXScatterElementsOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXScatterNDOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXGatherNDOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXReshapeOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXTransposeOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXUnsqueezeOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXSliceOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXSplitOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXSequenceOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXSqueezeOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXTileOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXResizeOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXDepthToSpaceOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXSpaceToDepthOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXConvOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXGridSampleOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXStaticSamplingOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXMaxPoolOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXIndexedMaxPoolOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXAveragePoolOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXAttentionOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXBatchNormalizationOpToTFLPatterns(
+        patterns, typeConverter);
+    populateLoweringONNXLayerNormalizationOpToTFLPatterns(
+        patterns, typeConverter);
+    populateLoweringONNXLRNOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXLpPoolOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXLSTMOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXStaticRecurrentOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXSTFTOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXReduceMeanOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXReduceMaxOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXReduceSumOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXPadOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXUpsampleAndPadOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXWhereOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXCompressTriluOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXIm2ColOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXStaticUncommonTensorOpToTFLPatterns(
+        patterns, typeConverter);
 
     ConversionTarget target(*context);
     target.addLegalDialect<BuiltinDialect, TFLCompatibilityDialect,
         arith::ArithDialect>();
-    target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp op) {
-      return typeConverter.isSignatureLegal(op.getFunctionType());
-    });
-    target.addDynamicallyLegalOp<func::ReturnOp>(
-        [&](func::ReturnOp op) { return typeConverter.isLegal(op); });
+    target.addLegalDialect<func::FuncDialect>();
     target.addIllegalDialect<ONNXDialect>();
-    if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
+    ConversionConfig config;
+    config.buildMaterializations = false;
+    if (failed(applyPartialConversion(module, target,
+            FrozenRewritePatternSet(std::move(patterns)), config))) {
+      signalPassFailure();
+      return;
+    }
+    if (failed(finalizeEntryPointTypes(module))) {
       signalPassFailure();
       return;
     }

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Modified by FlashUnlimited2019 in 2026.
 
 //===-- AdditionalONNXOps.td -- ONNX Dialect Additional Ops  -*- tablegen -===//
 //
@@ -32,6 +33,39 @@ include "src/IR/AttrBase.td"
 //===----------------------------------------------------------------------===//
 // ONNX Ops to assist lowering of ONNX.
 //===----------------------------------------------------------------------===//
+
+// AffineGrid has only an ONNX function body in the pinned schema. Import it as
+// a first-class operation so a fully static invocation does not expand into
+// unnecessary If/Shape/Range control flow before target lowering.
+def ONNXAffineGridOp:ONNX_Op<"AffineGrid",
+    [Pure, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>,
+     DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let summary = "ONNX AffineGrid operation";
+  let arguments = (ins
+    AnyTypeOf<[TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>,
+               TensorOf<[F64]>]>:$theta,
+    TensorOf<[I64]>:$size,
+    DefaultValuedAttr<SI64Attr, "0">:$align_corners);
+  let results = (outs
+    AnyTypeOf<[TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>,
+               TensorOf<[F64]>]>:$grid);
+  let extraClassDeclaration = [{
+    static int getNumberOfOperands() { return 2; }
+    static int getNumberOfResults() { return 1; }
+    static std::vector<int> getTypeMap() { return {30}; }
+  }];
+  let extraClassDefinition = [{
+    onnx_mlir::ONNXOpShapeHelper * ONNXAffineGridOp::getShapeHelper(
+        mlir::Operation *op, llvm::ArrayRef<mlir::Value> oper,
+        onnx_mlir::IndexExprBuilder *ieb,
+        onnx_mlir::IndexExprScope *scope) {
+      onnx_mlir::ONNXOpShapeHelper *sh =
+          new onnx_mlir::ONNXAffineGridOpShapeHelper(op, oper, ieb, scope);
+      assert(sh && "failed to allocate shape helper");
+      return sh;
+    }
+  }];
+}
 
 /*
   Note: each operation ONNXxxxOp that interact with shape helper should have
@@ -851,5 +885,3 @@ def ONNXIm2ColOp: ONNX_Op<"Im2Col",
     }
   }];
 }
-
-

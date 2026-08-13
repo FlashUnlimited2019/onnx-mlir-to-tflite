@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Copyright 2026 FlashUnlimited2019.
+
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
 #include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttr.hpp"
@@ -44,13 +46,15 @@ public:
       return failure();
     }
     Type elementType = tensorType.getElementType();
-    if (!elementType.isF32() && !elementType.isSignlessInteger(32) &&
+    if (!elementType.isF32() && !elementType.isInteger(1) &&
+        !elementType.isUnsignedInteger(32) &&
+        !elementType.isSignlessInteger(32) &&
         !elementType.isSignlessInteger(64)) {
       op.emitError() << "unsupported Constant element type: " << elementType;
       return failure();
     }
 
-    Type resultType = this->getTypeConverter()->convertType(sourceResultType);
+    Type resultType = convertRank4NCHWToNHWCType(sourceResultType);
     // Transpose by semantic layout, not by type inequality: OIHW [O,3,3,3]
     // and OHWI [O,3,3,3] have identical shapes but different element order.
     if (tensorType.getRank() == 4 && elementType.isF32()) {
@@ -64,8 +68,15 @@ public:
       constantValue = *transposed;
     }
 
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(
-        op, resultType, cast<TypedAttr>(constantValue));
+    if (elementType.isUnsignedInteger(32)) {
+      Operation *constant = createTFLOperation(rewriter, op.getLoc(),
+          "tfl.pseudo_const", TypeRange{resultType}, ValueRange{},
+          {rewriter.getNamedAttr("value", constantValue)});
+      rewriter.replaceOp(op, constant->getResults());
+    } else {
+      rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+          op, resultType, cast<TypedAttr>(constantValue));
+    }
     return success();
   }
 };

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // RUN: onnx-mlir-opt --convert-onnx-to-tfl --canonicalize %s -split-input-file | FileCheck %s
 
 module {

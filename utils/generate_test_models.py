@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 FlashUnlimited2019.
+
 """Generate deterministic, small ONNX models for ONNXToTFL tests."""
 
 from pathlib import Path

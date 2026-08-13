@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+MODEL_DIR="${REPO_ROOT}/../models/Qwen3-0.6B-64-sim"
+MODEL="${1:-${MODEL_DIR}/Qwen3-0.6B-64-sim.onnx}"
+OUTPUT="${2:-${REPO_ROOT}/build/test/models/Qwen3-0.6B-64-sim.tflite}"
+
+if [[ ! -f "${MODEL}" ]]; then
+  echo "Qwen3 model not found: ${MODEL}" >&2
+  exit 1
+fi
+if [[ ! -f "${MODEL}.data" ]]; then
+  echo "Qwen3 external data file not found: ${MODEL}.data" >&2
+  exit 1
+fi
+if [[ ! -x "${REPO_ROOT}/build/bin/onnx-to-tflite" ]]; then
+  echo "onnx-to-tflite is not built; run ./scripts/bootstrap_and_build.sh" >&2
+  exit 1
+fi
+
+if [[ -n "${PYTHON:-}" ]]; then
+  PYTHON_CMD=("${PYTHON}")
+elif command -v conda >/dev/null 2>&1; then
+  PYTHON_CMD=(conda run -n onnx python)
+else
+  PYTHON_CMD=(python)
+fi
+
+mkdir -p "$(dirname "${OUTPUT}")"
+if [[ "${REUSE_OUTPUT:-0}" != 1 || ! -f "${OUTPUT}" ]]; then
+  "${REPO_ROOT}/build/bin/onnx-to-tflite" "${MODEL}" -o "${OUTPUT}" \
+    --use-buffer-offset \
+    --verify-each
+fi
+TF_CPP_MIN_LOG_LEVEL=3 "${PYTHON_CMD[@]}" \
+  "${REPO_ROOT}/utils/inspect_tflite.py" "${OUTPUT}" \
+  --max-operators 2110 \
+  --max-constant-tensors 277 \
+  --forbid-op CUSTOM \
+  --forbid-op Flex
+
+for SEED in 20260806 20260807; do
+  TF_CPP_MIN_LOG_LEVEL=3 TF_ENABLE_ONEDNN_OPTS=0 "${PYTHON_CMD[@]}" \
+    "${REPO_ROOT}/test/e2e/run_similarity.py" \
+    --onnx "${MODEL}" \
+    --tflite "${OUTPUT}" \
+    --seed "${SEED}" \
+    --num-threads 8 \
+    --integer-input-range input_ids:0:151936 \
+    --min-cosine 0.999999 \
+    --max-relative-euclidean 0.0001
+done
