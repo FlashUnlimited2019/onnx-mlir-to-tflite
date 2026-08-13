@@ -82,7 +82,42 @@ See the [operator support matrix](docs/operator-support.md) for the exact
 supported types, ranks, attributes, and opset revisions. Only configurations
 listed there are claimed to be supported.
 
-## Build
+## Quick Start
+
+Prebuilt Linux x86_64 runtime packages are available from
+[GitHub Releases](https://github.com/FlashUnlimited2019/onnx-mlir-to-tflite/releases/latest).
+This is the recommended way to try the compiler without building LLVM/MLIR,
+ONNX-MLIR, and TensorFlow/LiteRT from source.
+
+Download both the `.tar.gz` archive and its accompanying `.sha256` file from
+the latest release, then verify and extract the package:
+
+```bash
+sha256sum -c onnx-mlir-to-tflite-runtime-*.tar.gz.sha256
+mkdir onnx-to-tflite-runtime
+tar -xzf onnx-mlir-to-tflite-runtime-*.tar.gz \
+  --strip-components=1 \
+  -C onnx-to-tflite-runtime
+cd onnx-to-tflite-runtime
+```
+
+Convert a static ONNX model with the packaged driver:
+
+```bash
+mkdir -p output tmp
+export TMPDIR="$PWD/tmp"
+
+./bin/onnx-to-tflite \
+  /path/to/model.onnx \
+  -o output/model.tflite
+```
+
+The prebuilt package is intended for Linux x86_64 and requires the glibc and
+libstdc++ ABI versions listed in its `README.md` and `BUILD_INFO.txt`. Ubuntu
+24.04 or newer is recommended. Build from source when the package is not
+compatible with the target system.
+
+## Build from source
 
 The complete pipeline requires building both the pinned LLVM/MLIR toolchain
 and two TensorFlow/LiteRT tools: `litert-opt` for optional TFL optimization and
@@ -107,6 +142,11 @@ instructions for reusing existing TensorFlow tools.
 
 ## Convert a model
 
+The driver is located at `./bin/onnx-to-tflite` in a prebuilt runtime package
+and at `./build/bin/onnx-to-tflite` in a source build. The examples below use
+the source-build path; replace it with `./bin/onnx-to-tflite` when working
+inside an extracted runtime package.
+
 ```bash
 ./build/bin/onnx-to-tflite \
   /path/to/model.onnx \
@@ -114,7 +154,8 @@ instructions for reusing existing TensorFlow tools.
 ```
 
 The driver automatically locates the other ONNX-MLIR and TensorFlow/LiteRT
-tools in a bootstrapped workspace. Explicit paths can also be provided:
+tools in either an extracted runtime package or a bootstrapped source
+workspace. Explicit paths can also be provided:
 
 ```bash
 ./build/bin/onnx-to-tflite \
