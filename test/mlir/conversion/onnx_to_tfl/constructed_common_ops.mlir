@@ -23,6 +23,12 @@ module {
     %13 = "onnx.Where"(%12, %8, %7) : (tensor<2x4xi1>, tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
     return %13 : tensor<2x4xf32>
   }
+
+  func.func @prelu_rank3(%arg0: tensor<1x12x32xf32>) -> tensor<1x12x32xf32> {
+    %slope = onnx.Constant dense<2.000000e-01> : tensor<1x12x1xf32>
+    %0 = "onnx.PRelu"(%arg0, %slope) : (tensor<1x12x32xf32>, tensor<1x12x1xf32>) -> tensor<1x12x32xf32>
+    return %0 : tensor<1x12x32xf32>
+  }
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 
@@ -34,4 +40,8 @@ module {
 // CHECK: "tfl.logical_or"
 // CHECK: "tfl.not_equal"
 // CHECK: "tfl.select_v2"
+// CHECK-NOT: onnx.
+// CHECK-LABEL: func.func @prelu_rank3
+// CHECK: "tfl.reshape"{{.*}}tensor<12x1xf32>
+// CHECK: "tfl.prelu"{{.*}}tensor<1x12x32xf32>
 // CHECK-NOT: onnx.

@@ -46,9 +46,11 @@ public:
       bool roundPreferFloor = adaptor.getNearestMode() == "round_prefer_floor";
       bool floorMode = adaptor.getNearestMode() == "floor";
       if (adaptor.getMode() != "nearest" ||
-          !((halfPixel && roundPreferFloor) || (asymmetric && floorMode)))
+          !((halfPixel && roundPreferFloor) ||
+              (asymmetric && (floorMode || roundPreferFloor))))
         return op.emitError("non-2D Resize supports nearest/half_pixel/"
-                            "round_prefer_floor or nearest/asymmetric/floor"),
+                            "round_prefer_floor, nearest/asymmetric/floor, or "
+                            "nearest/asymmetric/round_prefer_floor"),
                failure();
 
       Value result = input;
@@ -68,7 +70,7 @@ public:
         SmallVector<int32_t> indices;
         indices.reserve(outputExtent);
         for (int64_t outputIndex = 0; outputIndex < outputExtent;
-             ++outputIndex) {
+            ++outputIndex) {
           double coordinate =
               halfPixel ? (static_cast<double>(outputIndex) + 0.5) / scale - 0.5
                         : static_cast<double>(outputIndex) / scale;
@@ -101,13 +103,16 @@ public:
       return failure();
     }
 
-    // TFLite's half_pixel_centers nearest kernel floors the transformed
-    // coordinate. ONNX round_prefer_floor instead rounds to nearest (choosing
-    // the lower index only at ties), which differs notably for downsampling.
-    // Materialize the exact static ONNX H/W sample indices in logical NCHW.
+    // TFLite's nearest kernel floors the transformed coordinate. ONNX
+    // round_prefer_floor instead rounds to nearest (choosing the lower index
+    // only at ties). Materialize the exact static ONNX H/W sample indices in
+    // logical NCHW for supported coordinate transformations.
     if (adaptor.getMode() == "nearest" &&
-        adaptor.getCoordinateTransformationMode() == "half_pixel" &&
+        (adaptor.getCoordinateTransformationMode() == "half_pixel" ||
+            adaptor.getCoordinateTransformationMode() == "asymmetric") &&
         adaptor.getNearestMode() == "round_prefer_floor") {
+      bool halfPixel =
+          adaptor.getCoordinateTransformationMode() == "half_pixel";
       Value toLogical =
           createI32ShapeConstant(rewriter, op.getLoc(), {0, 3, 1, 2});
       Value result = createTFLOperation(rewriter, op.getLoc(), "tfl.transpose",
@@ -124,9 +129,10 @@ public:
         SmallVector<int32_t> indices;
         indices.reserve(outputExtent);
         for (int64_t outputIndex = 0; outputIndex < outputExtent;
-             ++outputIndex) {
+            ++outputIndex) {
           double coordinate =
-              (static_cast<double>(outputIndex) + 0.5) / scale - 0.5;
+              halfPixel ? (static_cast<double>(outputIndex) + 0.5) / scale - 0.5
+                        : static_cast<double>(outputIndex) / scale;
           int64_t index = static_cast<int64_t>(std::ceil(coordinate - 0.5));
           indices.push_back(static_cast<int32_t>(
               std::clamp(index, int64_t{0}, inputExtent - 1)));
@@ -181,7 +187,8 @@ public:
       alignCorners = true;
     } else {
       op.emitError("unsupported Resize configuration: expected "
-                   "nearest/asymmetric/floor, nearest/half_pixel/"
+                   "nearest/asymmetric/floor, nearest/asymmetric/"
+                   "round_prefer_floor, nearest/half_pixel/"
                    "round_prefer_floor, linear/half_pixel, or "
                    "linear/align_corners");
       return failure();

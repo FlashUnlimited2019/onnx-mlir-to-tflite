@@ -102,3 +102,23 @@ module {
 // CHECK-COUNT-5: "tfl.gather"
 // CHECK-NOT: "tfl.resize_nearest_neighbor"
 // CHECK-NOT: onnx.
+
+// -----
+
+module {
+  func.func @resize_asymmetric_round_prefer_floor(%input: tensor<1x2x4x4xf32>) -> tensor<1x2x7x7xf32> {
+    %none = "onnx.NoValue"() : () -> none
+    %sizes = arith.constant dense<[1, 2, 7, 7]> : tensor<4xi64>
+    %result = "onnx.Resize"(%input, %none, %none, %sizes) <{antialias = 0 : si64, coordinate_transformation_mode = "asymmetric", mode = "nearest", nearest_mode = "round_prefer_floor"}> : (tensor<1x2x4x4xf32>, none, none, tensor<4xi64>) -> tensor<1x2x7x7xf32>
+    return %result : tensor<1x2x7x7xf32>
+  }
+  "onnx.EntryPoint"() {func = @resize_asymmetric_round_prefer_floor} : () -> ()
+}
+
+// CHECK-LABEL: func.func @main
+// CHECK: arith.constant dense<[0, 3, 1, 2]> : tensor<4xi32>
+// CHECK: arith.constant dense<[0, 1, 1, 2, 2, 3, 3]> : tensor<7xi32>
+// CHECK-COUNT-2: "tfl.gather"
+// CHECK: arith.constant dense<[0, 2, 3, 1]> : tensor<4xi32>
+// CHECK-NOT: "tfl.resize_nearest_neighbor"
+// CHECK-NOT: onnx.

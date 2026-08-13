@@ -148,6 +148,7 @@
   afterward. Split
   requires static FP32 shapes and compile-time split sizes or output count.
   Resize supports static rank-4 spatial scaling with nearest/asymmetric/floor,
+  nearest/asymmetric/round_prefer_floor,
   nearest/half_pixel/round_prefer_floor, linear/half_pixel, or
   linear/align_corners semantics.
 - ReduceMean supports static FP32 tensors with omitted, attribute, or constant

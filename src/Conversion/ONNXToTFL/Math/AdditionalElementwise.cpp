@@ -281,6 +281,42 @@ public:
       slope = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
           TypeRange{physicalSlopeType}, ValueRange{slope, physicalShape})
                   ->getResult(0);
+    } else if (resultType.getRank() != 4) {
+      int64_t inputRank = inputType.getRank();
+      int64_t slopeRank = slopeType.getRank();
+      if (inputRank < 2 || slopeRank > inputRank)
+        return op.emitError(
+                   "PRelu requires an input rank of at least two and a slope "
+                   "rank no greater than the input rank"),
+               failure();
+
+      SmallVector<int64_t> expandedSlopeShape(inputRank, 1);
+      std::copy(slopeType.getShape().begin(), slopeType.getShape().end(),
+          expandedSlopeShape.end() - slopeRank);
+      for (int64_t axis = 0; axis < inputRank; ++axis) {
+        int64_t slopeDimension = expandedSlopeShape[axis];
+        int64_t inputDimension = inputType.getShape()[axis];
+        if (slopeDimension != 1 && slopeDimension != inputDimension)
+          return op.emitError("PRelu slope is not broadcast-compatible with "
+                              "the input"),
+                 failure();
+      }
+      if (expandedSlopeShape.front() != 1)
+        return op.emitError(
+                   "TFL PRelu does not support a batch-dependent slope"),
+               failure();
+
+      SmallVector<int64_t> normalizedSlopeShape(
+          llvm::drop_begin(expandedSlopeShape));
+      if (slopeType.getShape() != ArrayRef<int64_t>(normalizedSlopeShape)) {
+        auto normalizedSlopeType =
+            RankedTensorType::get(normalizedSlopeShape, rewriter.getF32Type());
+        Value normalizedShape =
+            createI32ShapeConstant(rewriter, op.getLoc(), normalizedSlopeShape);
+        slope = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+            TypeRange{normalizedSlopeType}, ValueRange{slope, normalizedShape})
+                    ->getResult(0);
+      }
     }
     Type physicalResultType = convertRank4NCHWToNHWCType(resultType);
     Value result = createTFLOperation(rewriter, op.getLoc(), "tfl.prelu",
