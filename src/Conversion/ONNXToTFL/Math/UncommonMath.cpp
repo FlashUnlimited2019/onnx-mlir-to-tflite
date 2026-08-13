@@ -394,7 +394,8 @@ public:
             !targetType.getElementType().isSignlessInteger(64)) ||
         failed(validateStaticF32TensorOrScalar(op, resultType, "NLL result")) ||
         !isa<NoneType>(op.getWeight().getType()) || op.getIgnoreIndex() ||
-        failed(labels) || labels->size() != targetType.getNumElements())
+        failed(labels) ||
+        labels->size() != static_cast<size_t>(targetType.getNumElements()))
       return op.emitError("ONNXToTFL NLLLoss requires static FP32 input, "
                           "constant integer targets, no weight/ignore_index"),
              failure();
