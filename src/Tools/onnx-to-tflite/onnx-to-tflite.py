@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 FlashUnlimited2019.
+
 """ONNX -> ONNX dialect -> TFL dialect -> TFLite FlatBuffer driver."""
 
 from __future__ import annotations
@@ -81,7 +84,34 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--keep-intermediate-files", action="store_true")
     parser.add_argument(
         "--verify-each", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--use-buffer-offset",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "append constants outside the FlatBuffer metadata and reference "
+            "them by file offset; enabled automatically for a model with a "
+            "large adjacent .data file"
+        ),
+    )
     return parser.parse_args()
+
+
+def _should_use_buffer_offset(input_path: Path) -> bool:
+    """Detect the common ONNX `<model>.onnx.data` large-model layout."""
+    candidates = {
+        input_path,
+        input_path.with_name(input_path.name + ".data"),
+        input_path.with_suffix(".data"),
+    }
+    total_size = sum(
+        candidate.stat().st_size for candidate in candidates
+        if candidate.is_file()
+    )
+    # TensorFlow begins automatically switching near this threshold. Detect it
+    # before conversion too, so intermediate files avoid the size-limited /tmp
+    # tmpfs and round-trip verification does not materialize every constant.
+    return total_size >= 1536 * 1024 * 1024
 
 
 def main() -> int:
@@ -95,6 +125,17 @@ def main() -> int:
     if input_path.suffix.lower() != ".onnx":
         print(f"error: expected a .onnx input, got: {input_path}", file=sys.stderr)
         return 2
+
+    use_buffer_offset = (
+        _should_use_buffer_offset(input_path)
+        if args.use_buffer_offset is None
+        else args.use_buffer_offset
+    )
+    if use_buffer_offset:
+        print(
+            "large-model mode: constants will use TFLite buffer offsets",
+            file=sys.stderr,
+        )
 
     try:
         onnx_mlir = _find_tool("onnx-mlir", args.onnx_mlir, script)
@@ -125,7 +166,12 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    temporary = tempfile.TemporaryDirectory(prefix="onnx-to-tflite-")
+    temporary = tempfile.TemporaryDirectory(
+        prefix="onnx-to-tflite-",
+        # Large textual MLIR intermediates can exceed a tmpfs even when the
+        # final offset-buffer TFLite file fits comfortably on disk.
+        dir=output_path.parent if use_buffer_offset else None,
+    )
     work_dir = Path(temporary.name)
     try:
         onnx_prefix = work_dir / "model"
@@ -183,19 +229,19 @@ def main() -> int:
             if args.verify_each:
                 tfl_opt_command.append("--verify-each=true")
             _run(tfl_opt_command, "TFL dialect optimization")
-        _run(
-            [
-                str(flatbuffer_translate),
-                "-mlir-to-tflite-flatbuffer",
-                str(tfl_mlir_path),
-                "-o",
-                str(flatbuffer_path),
-                "-emit-builtin-tflite-ops=true",
-                "-emit-select-tf-ops=false",
-                "-emit-custom-ops=false",
-            ],
-            "TFLite FlatBuffer export",
-        )
+        export_command = [
+            str(flatbuffer_translate),
+            "-mlir-to-tflite-flatbuffer",
+            str(tfl_mlir_path),
+            "-o",
+            str(flatbuffer_path),
+            "-emit-builtin-tflite-ops=true",
+            "-emit-select-tf-ops=false",
+            "-emit-custom-ops=false",
+        ]
+        if use_buffer_offset:
+            export_command.append("--use-buffer-offset")
+        _run(export_command, "TFLite FlatBuffer export")
         if not flatbuffer_path.is_file() or flatbuffer_path.stat().st_size == 0:
             raise RuntimeError("FlatBuffer exporter produced an empty output")
         with flatbuffer_path.open("rb") as flatbuffer:
@@ -204,16 +250,16 @@ def main() -> int:
 
         # Importing the file again exercises TensorFlow's schema verifier and
         # ensures the result is parseable as an actual TFLite model.
-        _run(
-            [
-                str(flatbuffer_translate),
-                "--tflite-flatbuffer-to-mlir",
-                str(flatbuffer_path),
-                "-o",
-                str(verified_mlir_path),
-            ],
-            "TFLite FlatBuffer verification",
-        )
+        verification_command = [
+            str(flatbuffer_translate),
+            "--tflite-flatbuffer-to-mlir",
+            str(flatbuffer_path),
+            "-o",
+            str(verified_mlir_path),
+        ]
+        if use_buffer_offset:
+            verification_command.append("--use-external-constant")
+        _run(verification_command, "TFLite FlatBuffer verification")
 
         # Only publish a file after export and schema round-trip validation.
         # Stage it next to the destination so the final atomic rename never

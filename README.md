@@ -1,170 +1,232 @@
-<!--- SPDX-License-Identifier: Apache-2.0 -->
-<p align="center"><img width="50%" src="docs/logo/onnx-mlir-1280x640.png" /></p>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Modified by FlashUnlimited2019 in 2026. -->
 
-# ONNX-MLIR
+# ONNX-MLIR TFLite
 
-This project (https://onnx.ai/onnx-mlir/) provides compiler technology to transform a valid Open Neural Network Exchange (ONNX) graph into code that implements the graph with minimum runtime support.
-It implements the [ONNX standard](https://github.com/onnx/onnx#readme) and is based on the underlying [LLVM/MLIR](https://mlir.llvm.org) compiler technology.
+ONNX-MLIR TFLite is an experimental compiler pipeline that converts static
+ONNX models directly to TensorFlow Lite FlatBuffers through MLIR. It is built
+as a downstream extension of [ONNX-MLIR](https://github.com/onnx/onnx-mlir)
+and reuses its ONNX importer, ONNX Dialect, shape inference, and
+canonicalization infrastructure.
 
-| System        | Build Status | Model Zoo Status |
-|---------------|--------------|------------------|
-| s390x-Linux   | [![Build Status](https://www.onnxmlir.xyz/jenkins/buildStatus/icon?job=ONNX-MLIR-Pipeline-Docker-Build&build=last:%24%7Bparams.GITHUB_PR_NUMBER_PUSH=main%7D&subject=Jenkins%20CI)](https://www.onnxmlir.xyz/jenkins/job/ONNX-MLIR-Pipeline-Docker-Build/) | [![Model Zoo Status](https://www.onnxmlir.xyz/jenkins/buildStatus/icon?job=ONNX-MLIR-Pipeline-Docker-Build&build=last:%24%7Bparams.GITHUB_PR_NUMBER_PUSH=main%7D&config=modelzoo)](https://www.onnxmlir.xyz/jenkins/job/ONNX-MLIR-Pipeline-Docker-Build/Model_20Zoo_20Report/) |
-| amd64-Linux   | [![Build Status](https://www.onnxmlir.xyz/jenkinx/buildStatus/icon?job=ONNX-MLIR-Pipeline-Docker-Build&build=last:%24%7Bparams.GITHUB_PR_NUMBER_PUSH=main%7D&subject=Jenkins%20CI)](https://www.onnxmlir.xyz/jenkinx/job/ONNX-MLIR-Pipeline-Docker-Build/) | [![Model Zoo Status](https://www.onnxmlir.xyz/jenkinx/buildStatus/icon?job=ONNX-MLIR-Pipeline-Docker-Build&build=last:%24%7Bparams.GITHUB_PR_NUMBER_PUSH=main%7D&config=modelzoo)](https://www.onnxmlir.xyz/jenkinx/job/ONNX-MLIR-Pipeline-Docker-Build/Model_20Zoo_20Report/) |
-| amd64-Windows | [![Build Status](https://dev.azure.com/onnx-pipelines/onnx/_apis/build/status/MLIR-Windows-CI?branchName=main)](https://dev.azure.com/onnx-pipelines/onnx/_build/latest?definitionId=9&branchName=main) | |
-| amd64-macOS   | [![Build Status](https://github.com/onnx/onnx-mlir/actions/workflows/macos-amd64-build.yml/badge.svg)](https://github.com/onnx/onnx-mlir/actions/workflows/macos-amd64-build.yml) |
-| | [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/5549/badge)](https://bestpractices.coreinfrastructure.org/projects/5549) |
+The project does not construct a TensorFlow graph, Keras model, or SavedModel.
+Unsupported configurations fail conversion instead of falling back to Select
+TF, Flex, or custom operators.
 
-This project contributes:
-* an ONNX Dialect that can be integrated in other projects,
-* a compiler interfaces that lower ONNX graphs into MLIR files/LLVM bytecodes/C & Java libraries,
-* an `onnx-mlir` driver to perform these lowering,
-* and a python/C/C++/Java runtime environment.
+## Compiler pipeline
 
-Current levels of support for the code generation of ONNX operations are listed here for
-[a generic CPU](docs/SupportedONNXOps-cpu.md) and
-[IBM's Telum integrated AI accelerator](docs/SupportedONNXOps-NNPA.md).
+The default compilation path is:
 
-## Interacting with the community.
-
-For ongoing discussions, we use an [`#onnx-mlir-discussion`](https://lfaifoundation.slack.com/archives/C01J4NAL4A2) slack channel established under the Linux Foundation AI and Data Workspace.
-Join this workspace using this [link](https://join.slack.com/t/lfaifoundation/shared_invite/zt-o65errpw-gMTbwNr7FnNbVXNVFkmyNA).
-
-We use GitHub Issues for request for comments, questions, or bug reports.
-Security-related issues are reported using the channels listed in the [SECURITY](SECURITY.md) page.
-
-We hold informal weekly meetings on Tuesdays where we discuss  current issues and progress. Meeting agenda, notes, and links (to participate) are found [here](https://github.com/onnx/onnx-mlir/wiki/Informal-meeting-agenda-and-notes). Please email alexe@us.ibm.com to request a 15-30 min time slot to discuss a specific topic of interest.
-
-## Setting up ONNX-MLIR using Prebuilt Containers
-
-The preferred approach to using and developing ONNX-MLIR is to use Docker Images and Containers, as getting the proper code dependences may be tricky on some systems. Our instructions on using ONNX-MLIR with Dockers are [here](docs/Docker.md).
-
-If you intend to develop code, you should look at our [workflow](docs/Workflow.md) document which help you setup your Docker environment in a way that let you contribute code easily.
-
-## Setting up ONNX-MLIR directly
-
-ONNX-MLIR runs natively on Linux, OSX, and Windows.
-Detailed instructions are provided below.
-
-### Prerequisites
-
-<!-- Keep list below in sync with docs/Prerequisite.md. -->
-```
-python >= 3.11
-clang >= 18.1.3
-protobuf >= 33.5
-cmake >= 3.26.0
-make >= 4.3 or ninja >= 1.10.2
-java >= 21 (optional)
+```text
+ONNX protobuf
+    |
+    |  onnx-mlir --EmitONNXIR
+    v
+ONNX Dialect MLIR
+    |
+    |  onnx-mlir-opt --convert-onnx-to-tfl
+    v
+TFL Dialect MLIR (unoptimized)
+    |
+    |  TensorFlow/LiteRT litert-opt
+    |  optional; enabled by default
+    v
+TFL Dialect MLIR (optimized)
+    |
+    |  TensorFlow flatbuffer_translate
+    v
+TFLite FlatBuffer
 ```
 
-All the `PyPi` package dependencies and their appropriate versions are captured in [requirements.txt](requirements.txt).
+Artifacts and intermediate IR appear as nodes; the executable responsible for
+each transformation appears on the connecting arrow. With
+`--no-optimize-tfl`, the `litert-opt` stage is bypassed and the unoptimized TFL
+Dialect MLIR is passed directly to `flatbuffer_translate`.
 
-Look [here](docs/Prerequisite.md) for help to set up the prerequisite software.
+The `onnx-to-tflite` driver orchestrates these stages, verifies intermediate
+results, and publishes the output only after FlatBuffer validation succeeds.
 
-At any point in time, ONNX-MLIR depends on a specific commit of the LLVM project that has been shown to work with the project.
-Periodically the maintainers need to move to a more recent LLVM level.
-Among other things, this requires to update the LLVM commit string in [clone-mlir.sh](utils/clone-mlir.sh).
-When updating ONNX-MLIR, it is good practice to check that the commit string of the MLIR/LLVM is the same as the one listed in that file. See instructions [here](docs/BuildONNX.md) when third-party ONNX also need to be updated.
+The ONNX-to-TFL stage is implemented with MLIR Dialect Conversion and requires
+the source ONNX operations to be fully legalized. TFL optimization remains in
+the TFL Dialect and applies TensorFlow/LiteRT canonicalization, fusion, and
+cleanup passes before FlatBuffer export.
 
-### Build
+ONNX-MLIR and TensorFlow are pinned to different LLVM/MLIR revisions. To avoid
+mixing incompatible MLIR C++ ABIs in one process, the pipeline uses textual TFL
+MLIR as the checked interface between the ONNX-MLIR tools and TensorFlow tools.
+TensorFlow reparses and verifies that IR using its authoritative TFL Dialect
+implementation.
 
-Directions to install MLIR and ONNX-MLIR are dependent on your OS.
-* [Linux or OSX](docs/BuildOnLinuxOSX.md).
-* [Windows](docs/BuildOnWindows.md).
+## Key properties
 
-After installation, an `onnx-mlir` executable should appear in the `build/Debug/bin` or `build/Release/bin` directory.
+- Static, ranked tensor compilation with FP32 as the primary activation type
+  and selected integer and boolean tensor support.
+- Layout-aware lowering: rank-4 activations use NHWC in TFLite, while other
+  graph ranks retain their ONNX axis order.
+- Compile-time conversion of convolution filters and broadcast parameters to
+  the layouts expected by TFLite.
+- Direct lowering to builtin TFLite operations without TensorFlow graph
+  conversion or runtime fallback operators.
+- Optional TensorFlow/LiteRT optimization, enabled by default and disabled with
+  `--no-optimize-tfl` for debugging or A/B comparison.
+- Automatic buffer-offset export for large models using common adjacent ONNX
+  external-data layouts.
+- Per-pass verification, FlatBuffer identifier checks, TensorFlow round-trip
+  parsing, and atomic output publication.
 
-If you have difficulties building, rebuilding, or testing `onnx-mlir`, check this [page](docs/TestingHighLevel.md) for helpful hints.
+See the [operator support matrix](docs/operator-support.md) for the exact
+supported types, ranks, attributes, and opset revisions. Only configurations
+listed there are claimed to be supported.
 
+## Build
 
-## Using ONNX-MLIR
+The complete pipeline requires building both the pinned LLVM/MLIR toolchain
+and two TensorFlow/LiteRT tools: `litert-opt` for optional TFL optimization and
+`flatbuffer_translate` for required FlatBuffer export. TensorFlow is invoked
+as a separate toolchain and is not linked into the ONNX-MLIR executables.
 
-The usage of `onnx-mlir` is as such:
+For a complete bootstrap build from an activated Python environment:
 
-```
-OVERVIEW: ONNX-MLIR modular optimizer driver
+```bash
+python -m pip install -r requirements.txt onnxruntime tensorflow
 
-USAGE: onnx-mlir [options] <input file>
-
-OPTIONS:
-
-Generic Options:
-
-  --help        - Display available options (--help-hidden for more)
-  --help-list   - Display list of available options (--help-list-hidden for more)
-  --version     - Display the version of this program
-
-ONNX-MLIR Options:
-These are frontend options.
-
-  Choose target to emit:
-      --EmitONNXBasic - Ingest ONNX and emit the basic ONNX operations without inferred shapes.
-      --EmitONNXIR    - Ingest ONNX and emit corresponding ONNX dialect.
-      --EmitMLIR      - Lower the input to MLIR built-in transformation dialect.
-      --EmitLLVMIR    - Lower the input to LLVM IR (LLVM MLIR dialect).
-      --EmitObj       - Compile the input to an object file.
-      --EmitLib       - Compile and link the input into a shared library (default).
-      --EmitJNI       - Compile the input to a jar file.
-
-  Optimization levels:
-      --O0           - Optimization level 0 (default).
-      --O1           - Optimization level 1.
-      --O2           - Optimization level 2.
-      --O3           - Optimization level 3.
-```
-
-The full list of options is given by the `-help` option.
-The `-` and the `--` prefix for flags can be used interchangeably.
-Note that just as most compilers, the default optimization level is `-O0`.
-We recommend using `-O3` for most applications.
-
-Options are also read from the `ONNX_MLIR_FLAGS` environment variable. For example, `ONNX_MLIR_FLAGS="-O3"` will ensure `-O3` for all compilations.
-
-### Simple Example
-
-For example, use the following command to lower an ONNX model (e.g., add.onnx) to ONNX dialect:
-```shell
-./onnx-mlir --EmitONNXIR add.onnx
-```
-The output should look like:
-```mlir
-module {
-  func.func @main_graph(%arg0: tensor<10x10x10xf32>, %arg1: tensor<10x10x10xf32>) -> tensor<10x10x10xf32> {
-    %0 = "onnx.Add"(%arg0, %arg1) : (tensor<10x10x10xf32>, tensor<10x10x10xf32>) -> tensor<10x10x10xf32>
-    return %0 : tensor<10x10x10xf32>
-  }
-}
+PYTHON_BIN="$(command -v python)" \
+BUILD_JOBS=8 \
+./scripts/bootstrap_and_build.sh
 ```
 
-An example based on the add operation is found [here](docs/doc_example), which build an ONNX model using a python script, and then provide a main program to load the model's value, compute, and print the models output.
+The script clones pinned LLVM and TensorFlow revisions inside this repository,
+builds all required tools, and runs an end-to-end smoke test. Generated source
+and build trees are ignored by Git. See the [build guide](docs/build.md) for
+prerequisites, repository layout, build products, configuration options, and
+instructions for reusing existing TensorFlow tools.
 
-### Writing a driver to perform inferences: end to end example
+## Convert a model
 
-An end to end example is provided [here](docs/mnist_example/README.md), which train, compile, and execute a simple MNIST example using our
-C/C++, Python, or Java interface.
+```bash
+./build/bin/onnx-to-tflite \
+  /path/to/model.onnx \
+  -o /path/to/model.tflite
+```
+
+The driver automatically locates the other ONNX-MLIR and TensorFlow/LiteRT
+tools in a bootstrapped workspace. Explicit paths can also be provided:
+
+```bash
+./build/bin/onnx-to-tflite \
+  /path/to/model.onnx \
+  -o /path/to/model.tflite \
+  --onnx-mlir /path/to/onnx-mlir \
+  --onnx-mlir-opt /path/to/onnx-mlir-opt \
+  --litert-opt /path/to/litert-opt \
+  --flatbuffer-translate /path/to/flatbuffer_translate
+```
+
+Useful diagnostic options include:
+
+```text
+--no-optimize-tfl          skip the optional TFL optimization stage
+--dump-onnx-mlir           preserve the imported ONNX Dialect MLIR
+--dump-tfl-mlir            preserve the final TFL Dialect MLIR
+--keep-intermediate-files  preserve all intermediate files
+--no-verify-each           disable per-pass MLIR verification
+--use-buffer-offset        force large-model buffer-offset export
+```
+
+Run `./build/bin/onnx-to-tflite --help` for the complete command-line
+interface.
+
+## Layout contract
+
+ONNX commonly represents rank-4 activations as NCHW, while TFLite uses NHWC.
+This project exposes rank-4 TFLite graph inputs and outputs as NHWC and keeps
+convolution and pooling regions in NHWC. It does not insert runtime transposes
+solely to preserve an NCHW external ABI. Callers must therefore adapt rank-4
+boundary tensors when comparing or integrating the generated model.
+
+Rank-1, rank-2, rank-3, and rank-5-or-higher graph boundaries retain their
+ONNX axis order. Local layout conversions required by individual operations,
+including Conv3D fallback, are represented explicitly inside the graph.
+
+See the [layout policy](docs/layout.md) for convolution filter layouts,
+broadcast rules, rank-sensitive behavior, and Conv3D reduction details.
+
+## Large models
+
+For models whose constants would exceed ordinary FlatBuffer metadata limits,
+the driver can use TensorFlow's buffer-offset format. Common adjacent external
+data files such as `model.onnx.data` are detected automatically once the model
+size reaches the configured threshold. The resulting `.tflite` remains a
+single self-contained file, but its consumer must support TFLite buffer
+offsets.
+
+Use `--use-buffer-offset` to enable this mode explicitly for other external
+data layouts.
+
+## Verification and tests
+
+Successful conversion includes all of the following checks:
+
+1. MLIR verification after each conversion stage by default.
+2. Rejection of unlegalized ONNX operations.
+3. TFLite `TFL3` file-identifier validation.
+4. FlatBuffer import back into MLIR through TensorFlow's parser.
+5. Atomic publication only after validation succeeds.
+
+Run the ONNX-to-TFL MLIR regression suite with:
+
+```bash
+llvm-project/build/bin/llvm-lit \
+  -sv build/test/mlir/conversion/onnx_to_tfl
+```
+
+The end-to-end similarity utility handles the rank-4 boundary layout contract,
+compares ONNX Runtime and TFLite results, and reports cosine similarity,
+Euclidean distance, relative Euclidean distance, RMSE, and maximum absolute
+error:
+
+```bash
+python test/e2e/run_similarity.py \
+  --onnx test/models/mlp.onnx \
+  --tflite build/test/models/mlp.tflite
+```
+
+## Current scope
+
+The project focuses on statically shaped inference graphs. Dynamic shapes,
+general control flow, quantization, sparse tensors, and arbitrary custom or
+Flex operators are outside the current scope. Some complex operations are
+supported only for constrained static configurations or through ONNX-MLIR
+importer decomposition.
+
+Review the [known limitations](docs/known-limitations.md) before relying on a
+configuration that is not explicitly covered by the
+[operator support matrix](docs/operator-support.md).
 
 ## Documentation
 
-Documentation is provided in the `docs` sub-directory; the [DocumentList](docs/DocumentList.md) page provides an organized list of documents. Information is also provided on our public facing
-[onnx.ai/onnx-mlir](https://onnx.ai/onnx-mlir/) pages.
+| Document | Description |
+| --- | --- |
+| [Build guide](docs/build.md) | Complete LLVM/MLIR, ONNX-MLIR, and TensorFlow/LiteRT build procedure |
+| [Operator support](docs/operator-support.md) | Supported ONNX operations, opsets, types, ranks, attributes, and test coverage |
+| [Architecture](docs/architecture.md) | Cross-version MLIR boundary, conversion design, optimization, and export details |
+| [Layout policy](docs/layout.md) | Rank-sensitive layout contract and convolution lowering rules |
+| [Known limitations](docs/known-limitations.md) | Unsupported configurations and implementation constraints |
 
-## Contributing
+The original ONNX-MLIR documentation remains available under `docs/` and at
+[onnx.ai/onnx-mlir](https://onnx.ai/onnx-mlir/).
 
-We are welcoming contributions from the community.
-Please consult the [CONTRIBUTING](CONTRIBUTING.md) page for help on how to proceed.
+## Project lineage and license
 
-ONNX-MLIR requires committers to sign their code using the [Developer Certificate of Origin (DCO)](https://developercertificate.org).
-Practically, each `git commit` needs to be signed, see [here](docs/Workflow.md#step-7-commit--push) for specific instructions.
+This repository retains the history and compiler infrastructure of upstream
+ONNX-MLIR and adds the ONNX-to-TFL conversion and TFLite export pipeline.
 
-## Code of Conduct
+The upstream base is ONNX-MLIR commit
+[`7cea64f8aa2fbc56f859df768211a95dc2c72ad6`](https://github.com/onnx/onnx-mlir/commit/7cea64f8aa2fbc56f859df768211a95dc2c72ad6).
+All project-specific compiler, tooling, test, and documentation changes are
+maintained independently from that revision.
 
-The ONNX-MLIR code of conduct is described at https://onnx.ai/codeofconduct.html.
+See the repository [LICENSE](LICENSE) for licensing information.
 
-## Adopters
-<!-- Please open a PR to add your company/product here. -->
-
-* IBM [zDLC compiler](https://github.com/IBM/zDLC) uses onnx-mlir technology to transform ONNX models into executable binary for [IBM Telum](https://www.ibm.com/z/telum) servers.
-
-## Projects related/using onnx-mlir
-
-* The [onnx-mlir-serving](https://github.com/IBM/onnx-mlir-serving) project implements a GRPC server written with C++ to serve onnx-mlir compiled models. Benefiting from C++ implementation, ONNX Serving has very low latency overhead and high throughput.
+This is an independent project and is not an official ONNX or ONNX-MLIR
+release.

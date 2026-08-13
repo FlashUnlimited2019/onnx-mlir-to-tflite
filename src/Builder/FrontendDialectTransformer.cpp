@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Modified by FlashUnlimited2019 in 2026.
+
 //===--------- FrontendDialectTransformer.cpp - MLIR Operations -----------===//
 //
 // Copyright 2019 The IBM Research Authors.
@@ -979,18 +981,31 @@ private:
    * Special handle for Dropout operations.
    */
   void ImportNodeDropout(const onnx::NodeProto &node) {
-    int nOps = node.input().size();
+    // Some legacy inference models declare the optional Dropout mask as an
+    // FP32 value even though every supported ONNX schema requires a boolean
+    // mask. If that malformed mask is unused, import it as an omitted optional
+    // result so the inference-only Dropout canonicalization can erase the op.
+    onnx::NodeProto compatibleNode(node);
+    if (compatibleNode.output_size() > 1 && !compatibleNode.output(1).empty()) {
+      std::optional<Type> maskType = ConvertOnnxType(compatibleNode.output(1));
+      auto shapedType =
+          maskType ? mlir::dyn_cast<ShapedType>(*maskType) : ShapedType();
+      if (shapedType && !shapedType.getElementType().isInteger(1))
+        compatibleNode.set_output(1, "");
+    }
+
+    int nOps = compatibleNode.input().size();
     int nIn = ONNXDropoutOp::getNumberOfOperands();
     if (nOps == nIn) {
       // All inputs are specified
-      buildOperation<ONNXDropoutOp>(node);
+      buildOperation<ONNXDropoutOp>(compatibleNode);
       return;
     }
 
     // Add the default value for optional input
     // Copy the provided inputs first
     std::vector<Value> inputs;
-    for (const auto &item : node.input()) {
+    for (const auto &item : compatibleNode.input()) {
       if (const Value *valuePtr = frontend_symbols_.GetByOnnxName(item)) {
         inputs.push_back(*valuePtr);
       }
@@ -1026,8 +1041,9 @@ private:
       inputs.push_back(constantResult);
     }
     int nOut = ONNXDropoutOp::getNumberOfResults();
-    auto attributes = ImportNodeAttributes(node);
-    buildOutputAndOperation<ONNXDropoutOp>(node, inputs, nIn, nOut, attributes);
+    auto attributes = ImportNodeAttributes(compatibleNode);
+    buildOutputAndOperation<ONNXDropoutOp>(
+        compatibleNode, inputs, nIn, nOut, attributes);
   }
 
   /*!
@@ -1410,7 +1426,15 @@ private:
     std::string opName = node.op_type() + GetImportVersionOfNode(node);
     auto handler = import_handler_map_.find(opName);
     std::vector<std::string> funcs = options_.functionsToDecompose;
-    if (!(std::find(funcs.begin(), funcs.end(), opName) != funcs.end())) {
+    // The generated handler table is keyed by op name, not by (domain, op
+    // name). Do not accidentally import an extension operator such as
+    // com.microsoft::Attention as the unrelated ai.onnx::Attention op merely
+    // because their unqualified names are equal.
+    bool isStandardDomain = node.domain().empty() ||
+                            node.domain() == "ai.onnx" ||
+                            node.domain() == "ai.onnx.ml";
+    if (isStandardDomain &&
+        !(std::find(funcs.begin(), funcs.end(), opName) != funcs.end())) {
       if (handler != import_handler_map_.end()) {
         // It's a regular op with a registered handler.
         (this->*(handler->second))(node);
@@ -1440,6 +1464,12 @@ private:
 
   void InitHandlerMap() {
 #include "src/Builder/OpBuildTable.inc"
+    // AffineGrid is represented by an ONNX schema function upstream. Keep a
+    // native dialect op for static target lowering instead of importing the
+    // function's general dynamic control-flow implementation.
+    import_handler_map_["AffineGrid"] =
+        &onnx_mlir::detail::FrontendGenImpl::buildOperation<
+            mlir::ONNXAffineGridOp>;
   }
 
   /*!
@@ -1569,7 +1599,7 @@ bool ImportFrontendModelInternal(onnx::ModelProto &model, MLIRContext &context,
   // Get the version of the model
   // Code copied from onnx/onnx/version_coverter/convert.cc
   for (auto it = model.opset_import().begin(); it != model.opset_import().end();
-       ++it) {
+      ++it) {
     if (it->domain() == "" || it->domain() == "ai.onnx") {
       originVersion = it->version();
       break;
@@ -1636,7 +1666,7 @@ int readAndStripComments(
   // Remove // comments, which are non-standard json and onnx text
   // but appear in lit tests in test/mlir/onnx/parse.
   for (llvm::line_iterator line(*buf, /*SkipBlanks=*/false), end; line != end;
-       ++line) {
+      ++line) {
     if (line->ltrim(" \t").starts_with("//"))
       continue; // omit comment lines beginning with (whitespace and) //
     if (line->contains("//")) {

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 FlashUnlimited2019.
 
 set -euo pipefail
 
@@ -8,12 +9,12 @@ readonly TENSORFLOW_COMMIT=eef0088899ce97a533463fade6b54b3140f515e5
 readonly BAZEL_VERSION=7.7.0
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-readonly WORKSPACE_ROOT="$(cd "${REPO_ROOT}/.." && pwd)"
-readonly DEPS_ROOT="${WORKSPACE_ROOT}/.deps"
+readonly DEPS_ROOT="${REPO_ROOT}/.deps"
 readonly NINJA_BIN="${DEPS_ROOT}/bin/ninja"
 readonly BAZEL_BIN="${DEPS_ROOT}/bin/bazel"
-readonly LLVM_ROOT="${LLVM_ROOT:-${WORKSPACE_ROOT}/llvm-project}"
-readonly TENSORFLOW_ROOT="${TENSORFLOW_ROOT:-${WORKSPACE_ROOT}/tensorflow}"
+readonly LLVM_ROOT="${LLVM_ROOT:-${REPO_ROOT}/llvm-project}"
+readonly TENSORFLOW_ROOT="${TENSORFLOW_ROOT:-${REPO_ROOT}/tensorflow}"
+readonly BAZEL_OUTPUT_ROOT="${BAZEL_OUTPUT_ROOT:-${REPO_ROOT}/.bazel-output}"
 readonly BUILD_ROOT="${REPO_ROOT}/build"
 readonly PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
 
@@ -93,7 +94,7 @@ run cmake -E chdir "${TENSORFLOW_ROOT}" env \
   "${PYTHON_BIN}" configure.py
 run cmake -E chdir "${TENSORFLOW_ROOT}" "${BAZEL_ENV[@]}" \
   "${BAZEL_BIN}" "${BAZEL_STARTUP_ARGS[@]}" \
-  --output_base="${WORKSPACE_ROOT}/.bazel-output" build \
+  --output_base="${BAZEL_OUTPUT_ROOT}" build \
   --jobs="${BUILD_JOBS:-24}" --local_resources=memory=65536 --config=opt \
   //tensorflow/compiler/mlir/lite:flatbuffer_translate \
   //tensorflow/compiler/mlir/lite:litert-opt

@@ -2,11 +2,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Copyright 2026 FlashUnlimited2019.
+
 #include "src/Conversion/ONNXToTFL/ONNXToTFLLegalizeUtils.hpp"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttr.hpp"
+#include "src/Dialect/ONNX/ONNXOps.hpp"
 
 #include <cstring>
 
@@ -15,6 +19,18 @@ using namespace mlir;
 namespace onnx_mlir {
 
 LogicalResult validateStaticF32Tensor(
+    Operation *op, Type type, StringRef role) {
+  if (failed(validateStaticF32TensorOrScalar(op, type, role)))
+    return failure();
+  auto tensorType = cast<RankedTensorType>(type);
+  if (tensorType.getRank() < 1) {
+    return op->emitError() << "ONNXToTFL MVP requires activation rank >= 1 ("
+                           << role << ")";
+  }
+  return success();
+}
+
+LogicalResult validateStaticF32TensorOrScalar(
     Operation *op, Type type, StringRef role) {
   auto tensorType = dyn_cast<RankedTensorType>(type);
   if (!tensorType) {
@@ -32,10 +48,6 @@ LogicalResult validateStaticF32Tensor(
     return op->emitError()
            << "ONNXToTFL MVP only supports f32 activation tensors (" << role
            << ": " << type << ")";
-  }
-  if (tensorType.getRank() < 1) {
-    return op->emitError() << "ONNXToTFL MVP requires activation rank >= 1 ("
-                           << role << ")";
   }
   return success();
 }
@@ -62,11 +74,52 @@ Value createI32ShapeConstant(ConversionPatternRewriter &rewriter, Location loc,
   return arith::ConstantOp::create(rewriter, loc, type, attr);
 }
 
+Value createI32ScalarTensorConstant(
+    ConversionPatternRewriter &rewriter, Location loc, int32_t value) {
+  auto type = RankedTensorType::get({}, rewriter.getI32Type());
+  auto attr = DenseIntElementsAttr::get(type, ArrayRef<int32_t>{value});
+  return arith::ConstantOp::create(rewriter, loc, type, attr);
+}
+
 Value createF32ScalarTensorConstant(
     ConversionPatternRewriter &rewriter, Location loc, float value) {
   auto type = RankedTensorType::get({}, rewriter.getF32Type());
   auto attr = DenseFPElementsAttr::get(type, ArrayRef<float>{value});
   return arith::ConstantOp::create(rewriter, loc, type, attr);
+}
+
+FailureOr<SmallVector<int64_t>> getConstantIntValues(Value value) {
+  Attribute attribute;
+  if (auto constant = value.getDefiningOp<ONNXConstantOp>())
+    attribute = constant.getValueAttr();
+  else if (auto constant = value.getDefiningOp<arith::ConstantOp>())
+    attribute = constant.getValue();
+  auto elements = dyn_cast_or_null<ElementsAttr>(attribute);
+  if (!elements || !elements.getElementType().isIntOrIndex())
+    return failure();
+
+  SmallVector<int64_t> values;
+  values.reserve(elements.size());
+  for (APInt item : elements.getValues<APInt>())
+    values.push_back(item.getSExtValue());
+  return values;
+}
+
+FailureOr<SmallVector<float>> getConstantF32Values(Value value) {
+  Attribute attribute;
+  if (auto constant = value.getDefiningOp<ONNXConstantOp>())
+    attribute = constant.getValueAttr();
+  else if (auto constant = value.getDefiningOp<arith::ConstantOp>())
+    attribute = constant.getValue();
+  auto elements = dyn_cast_or_null<ElementsAttr>(attribute);
+  if (!elements || !elements.getElementType().isF32())
+    return failure();
+
+  SmallVector<float> values;
+  values.reserve(elements.size());
+  for (APFloat item : elements.getValues<APFloat>())
+    values.push_back(item.convertToFloat());
+  return values;
 }
 
 Type convertRank4NCHWToNHWCType(Type type) {

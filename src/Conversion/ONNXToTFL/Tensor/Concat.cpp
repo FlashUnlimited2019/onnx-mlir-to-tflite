@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Copyright 2026 FlashUnlimited2019.
+
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
 using namespace mlir;
@@ -46,11 +48,10 @@ public:
     SmallVector<NamedAttribute> attributes{
         rewriter.getNamedAttr("axis", rewriter.getI32IntegerAttr(axis)),
         getFusedActivationNone(rewriter)};
-    Operation *newOp = createTFLOperation(rewriter, op.getLoc(),
-        "tfl.concatenation",
-        TypeRange{
-            this->getTypeConverter()->convertType(op->getResult(0).getType())},
-        inputs, attributes);
+    Operation *newOp =
+        createTFLOperation(rewriter, op.getLoc(), "tfl.concatenation",
+            TypeRange{convertRank4NCHWToNHWCType(op->getResult(0).getType())},
+            inputs, attributes);
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }
