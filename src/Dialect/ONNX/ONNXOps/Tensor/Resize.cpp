@@ -5,6 +5,7 @@
 //===------------------ Resize.cpp - ONNX Operations ----------------------===//
 //
 // Copyright 2019-2022 The IBM Research Authors.
+// Modified by FlashUnlimited2019 in 2026.
 //
 // =============================================================================
 //
@@ -47,8 +48,15 @@ bool isAbsent(Value input) {
 LogicalResult ONNXResizeOpShapeHelper::computeShape() {
   auto resizeOp = mlir::dyn_cast<ONNXResizeOp>(op);
   ONNXResizeOpAdaptor operandAdaptor(operands, resizeOp);
-  if (operandAdaptor.getAxes().has_value())
-    return op->emitOpError("axes are unsupported");
+  if (operandAdaptor.getAxes().has_value()) {
+    auto resultType = mlir::dyn_cast<ShapedType>(resizeOp.getY().getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return op->emitOpError("axes require a statically inferred result shape");
+    DimsExpr outputDims;
+    createIE->getShapeAsDims(resizeOp.getY(), outputDims);
+    setOutputDims(outputDims);
+    return success();
+  }
   const auto x = operandAdaptor.getX();
   if (!hasShapeAndRank(x)) {
     return failure();

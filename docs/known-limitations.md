@@ -147,10 +147,11 @@
   unchanged singleton axes can be removed before the TFLite Slice and restored
   afterward. Split
   requires static FP32 shapes and compile-time split sizes or output count.
-  Resize supports static rank-4 spatial scaling with nearest/asymmetric/floor,
-  nearest/asymmetric/round_prefer_floor,
-  nearest/half_pixel/round_prefer_floor, linear/half_pixel, or
-  linear/align_corners semantics.
+  Resize supports static rank-1 through rank-5 FP32 tensors with compile-time
+  scales or sizes and ROI. Common rank-4 cases use native TFL resize ops;
+  other nearest, linear, cubic, antialias, axes, aspect-ratio, and crop cases
+  use compile-time separable interpolation matrices. Large static extents may
+  therefore increase FlatBuffer size. Nearest-mode antialias is unsupported.
 - ReduceMean supports static FP32 tensors with omitted, attribute, or constant
   axes, negative-axis normalization, both keepdims values, and
   noop-with-empty-axes. Rank-4 inputs are restored to logical NCHW for general
