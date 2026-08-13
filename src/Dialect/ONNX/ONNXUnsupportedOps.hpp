@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Modified by FlashUnlimited2019 in 2026.
+
 //===--------------- ONNXUnsupportedOps.hpp - ONNX Operations -------------===//
 //
 // Copyright 2023-2024 The IBM Research Authors.
@@ -23,6 +25,7 @@
 // Set of ONNX Ops that we currently do not support, listed alphabetically.
 // Please remove from list when support is added.
 UNSUPPORTED_OPS(ONNXAdagradOp)
+UNSUPPORTED_OPS(ONNXAffineGridOp)
 UNSUPPORTED_OPS(ONNXAdamOp)
 UNSUPPORTED_OPS(ONNXArrayFeatureExtractorOp)
 UNSUPPORTED_OPS(ONNXBatchNormalizationOp)

@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Modified by FlashUnlimited2019 in 2026.
+
 //===------------------ Compress.cpp - ONNX Operations --------------------===//
 //
 // Copyright 2019-2022 The IBM Research Authors.
@@ -44,17 +46,41 @@ LogicalResult ONNXCompressOpShapeHelper::computeShape() {
     assert(-inputRank <= optionalAxis.value() &&
            optionalAxis.value() < inputRank && "axis out of range");
 
-  // Get the dimension derived from the condition. Assume in shape helper that
-  // it is only going to be a question mark. ONNX to Krnl lowering will compute
-  // the actual value.
-  // TODO: if cond is constant, the compute the actual value.
-  IndexExpr dynDim = QuestionmarkIndexExpr(/*isFloat*/ false);
+  // A constant condition makes Compress fully static. This is especially
+  // useful for frontends that materialize masks as initializers: leaving the
+  // result dynamic here needlessly prevents later static-only conversions.
+  IndexExpr compressedDim = QuestionmarkIndexExpr(/*isFloat*/ false);
+  bool hasStaticCompressedDim = false;
+  if (ElementsAttr conditionAttr = getElementAttributeFromONNXValue(cond)) {
+    int64_t consideredElements = conditionAttr.getNumElements();
+    if (optionalAxis.has_value()) {
+      int64_t axis = optionalAxis.value();
+      if (axis < 0)
+        axis += inputRank;
+      if (createIE->getShapeAsDim(input, axis).isLiteral())
+        consideredElements = std::min(consideredElements,
+            createIE->getShapeAsDim(input, axis).getLiteral());
+    } else if (mlir::cast<ShapedType>(input.getType()).hasStaticShape()) {
+      consideredElements = std::min(consideredElements,
+          mlir::cast<ShapedType>(input.getType()).getNumElements());
+    }
+
+    int64_t selectedElements = 0;
+    int64_t index = 0;
+    for (APInt value : conditionAttr.getValues<APInt>()) {
+      if (index++ >= consideredElements)
+        break;
+      selectedElements += !value.isZero();
+    }
+    compressedDim = LiteralIndexExpr(selectedElements);
+    hasStaticCompressedDim = true;
+  }
 
   // Compute dims for output.
   DimsExpr outputDims;
   if (!optionalAxis.has_value())
     // Reduced to a single dimensional array, of dynamic size.
-    outputDims.emplace_back(dynDim);
+    outputDims.emplace_back(compressedDim);
   else {
     // Has same dimensionality as input, with axis dimension being the dynamic
     // size.
@@ -66,11 +92,11 @@ LogicalResult ONNXCompressOpShapeHelper::computeShape() {
     if (axisValue < 0)
       axisValue += inputRank;
 
-    outputDims[axisValue] = dynDim;
+    outputDims[axisValue] = compressedDim;
   }
 
-  // Cannot refine shape as we may otherwise loose the dynamic dim.
-  setOutputDims(outputDims, /*n*/ 0, /*refineShape*/ false);
+  // A non-constant condition remains dynamic and must not be refined away.
+  setOutputDims(outputDims, /*n*/ 0, /*refineShape*/ hasStaticCompressedDim);
   return success();
 }
 

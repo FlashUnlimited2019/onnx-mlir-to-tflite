@@ -1,56 +1,137 @@
-<!--- SPDX-License-Identifier: Apache-2.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Contributing to the ONNX-MLIR project
+# Contributing to ONNX-MLIR to TFLite
 
-## Building ONNX-MLIR
+Thank you for your interest in improving ONNX-MLIR to TFLite. This repository
+is an independent downstream project based on ONNX-MLIR; it is not an official
+ONNX or ONNX-MLIR release.
 
-Up to date info on how to build the project is located in the top directory [README](README.md).
+Changes specific to ONNX-to-TFL lowering, TFLite export, or this project's
+tooling and documentation should be proposed here. Changes that apply generally
+to ONNX-MLIR and do not depend on the TFLite pipeline may be better submitted to
+the [upstream ONNX-MLIR project](https://github.com/onnx/onnx-mlir).
 
-Since you are interested in contributing code, you should look in the [Workflow](docs/Workflow.md) for detailed step by step directives on how to create a fork, compile it, and then push your changes for review.
+## Before contributing
 
-Contributors have to sign their code using the [Developer Certificate of Origin (DCO)](https://developercertificate.org); make sure to check our [instructions](docs/Workflow.md#step-7-commit--push) prior to committing code to our repo.
+- Search this repository's issues and pull requests for related work.
+- Open an issue before undertaking a large change or changing a public
+  interface.
+- Keep contributions focused. Avoid mixing unrelated refactoring with a
+  feature or bug fix.
+- Do not commit generated build trees, large model weights, proprietary models,
+  credentials, or machine-specific paths.
 
-A comprehensive list of documents is found [here](docs/DocumentList.md).
+All participation is subject to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-## Guides for code generation for ONNX operations
-* A guide on how to add support for a new operation is found [here](docs/ImportONNXDefs.md#add_operation).
-* A guide to use Dialect builder details how to generate Krnl, Affine, MemRef, and Standard Dialect operations [here](docs/LoweringCode.md).
-* A guide on how to best report errors is detailed [here](docs/ErrorHandling.md).
-* Our ONNX dialect is derived from the machine readable ONNX specs. When upgrading the supported opset, or simply adding features to the ONNX dialects such as new verifiers, constant folding, canonicalization, or other such features, we need to regenerate the ONNX TableGen files. See [here](docs/ImportONNXDefs.md#build)) on how to proceed in such cases.
-* To add an option to the onnx-mlir command, see instructions [here](docs/Options.md).
-* To test new code, see [here](docs/Testing.md) for instructions.
-* A guide on how to do constant propagation for ONNX operations is found
-  [here](docs/ConstPropagationPass.md).
-* A guide on how to analyze dynamic dimensions and query their equality at compile time is found [here](docs/DynamicDimensionAnalysis.md).
-* To build and test for specialized accelerator, see [here](docs/AccelNNPAHowToUseAndTest.md)
+## Build the project
 
-## ONNX-MLIR specific dialects
+Follow the [build guide](docs/build.md) for prerequisites and a complete
+repository-local LLVM/MLIR, ONNX-MLIR, and TensorFlow/LiteRT build. The standard
+bootstrap command is:
 
-* The onnx-mlir project is based on the opset version defined [here](docs/Dialects/onnx.md). This is a reference to a possibly older version of the current version of the ONNX operators defined in the onnx/onnx repo [here](https://github.com/onnx/onnx/blob/main/docs/Operators.md).
-* The Krnl Dialect is used to lower ONNX operators to MLIR affine. The Krnl Dialect is defined [here](docs/Dialects/krnl.md).
-* To update the internal documentation on our dialects when there are changes, please look for guidance [here](docs/ImportONNXDefs.md#update-your-operations-status).
+```bash
+PYTHON_BIN="$(command -v python)" \
+BUILD_JOBS=8 \
+./scripts/bootstrap_and_build.sh
+```
 
-## Coding practices for ONNX-MLIR
+The script builds the required toolchains and runs an end-to-end smoke test.
+Build products and downloaded toolchains are ignored by Git.
 
-* When adding or updating code, see [here](CODING_PRACTICE.md) for coding practices.
+## Development workflow
 
-## Testing and debugging ONNX-MLIR
+1. Fork the repository and create a branch from the latest `main`.
+2. Implement the smallest complete change that addresses the issue.
+3. Add focused regression tests and, when appropriate, numerical validation.
+4. Run the relevant format, build, and test commands locally.
+5. Update documentation when support, behavior, layout, or limitations change.
+6. Open a pull request describing the motivation, implementation, limitations,
+   and validation performed.
 
-* To test new code, see [here](docs/Testing.md) for instructions.
-* We have support on how to trace performance issue using instrumentation. Details are found [here](docs/Instrumentation.md).
-* We have support to debug numerical errors. See [here](docs/DebuggingNumericalError.md).
+Pull requests should remain reviewable and should not contain generated build
+output or unrelated formatting changes.
 
-## Running ONNX models in Python and C
+## Adding or extending an operator
 
-* Here is an end to end MNIST example using C++ or python interface [link](docs/mnist_example/README.md).
-* Here is how to run a compiled model in python [link](docs/UsingPyRuntime.md).
-* Here is the C runtime API to run models in C/C++ [link](https://onnx.ai/onnx-mlir/doxygen_html/OnnxMlirRuntime/index.html).
+ONNX-to-TFL conversion code is located in
+`src/Conversion/ONNXToTFL/`. Contributions to operator support should:
+
+- use MLIR Dialect Conversion and fully legalize the supported ONNX operation;
+- preserve ONNX type, shape, broadcasting, axis, padding, and layout semantics;
+- emit builtin TFLite operations or compositions of builtin operations;
+- avoid Select TF, Flex, and custom-operator fallbacks;
+- diagnose unsupported types, ranks, shapes, attributes, and dynamic forms;
+- add focused MLIR tests under `test/mlir/conversion/onnx_to_tfl/`;
+- add end-to-end numerical coverage when the change affects runtime behavior;
+- update the [operator support matrix](docs/operator-support.md);
+- update the [layout policy](docs/layout.md) or
+  [known limitations](docs/known-limitations.md) when applicable.
+
+Prefer small, deterministically generated test fixtures. Do not add large model
+files solely for regression coverage.
+
+## Formatting
+
+Python files are checked with Black:
+
+```bash
+python -m black --check --exclude third_party .
+```
+
+C and C++ files under `src/` are checked with clang-format 9 using the
+repository's `.clang-format` configuration. Format changed source files before
+submitting:
+
+```bash
+clang-format -i path/to/changed_file.cpp
+```
+
+Also check patches for whitespace errors:
+
+```bash
+git diff --check
+```
+
+Avoid applying formatters to unrelated files.
+
+## Testing
+
+At minimum, build the affected targets and run the ONNX-to-TFL MLIR regression
+suite:
+
+```bash
+cmake --build build --parallel 8
+
+llvm-project/build/bin/llvm-lit \
+  -sv build/test/mlir/conversion/onnx_to_tfl
+```
+
+For behavior visible in a generated FlatBuffer, convert a representative static
+model and compare it with ONNX Runtime:
+
+```bash
+./build/bin/onnx-to-tflite \
+  test/models/simple_conv.onnx \
+  -o /tmp/simple_conv.tflite
+
+python test/e2e/run_similarity.py \
+  --onnx test/models/simple_conv.onnx \
+  --tflite /tmp/simple_conv.tflite
+```
+
+Report the commands and results in the pull request. More extensive testing may
+be required for layout-sensitive, high-rank, recurrent, attention, or large
+model changes.
 
 ## Documentation
 
-* To add documentation to our https://onnx.ai/onnx-mlir/, refer to instructions [here](docs/Documentation.md).
+Keep public documentation general and reproducible. Avoid embedding private
+paths, unpublished model names, migration notes, or one-off benchmark results.
+Document supported configurations in the operator support matrix rather than
+claiming unrestricted support for an entire operator or opset.
 
-## Coordinating support for new ONNX operations
+## Licensing
 
-* Check this issue for status on operations required for ONNX Model Zoo [Issue 128](https://github.com/onnx/onnx-mlir/issues/128).
-* Claim an op that you are working on by adding a comment on this [Issue #922](https://github.com/onnx/onnx-mlir/issues/922).
+This project is distributed under the [Apache License 2.0](LICENSE). Unless you
+explicitly state otherwise, contributions submitted to this repository are
+provided under the same license, consistent with Section 5 of Apache-2.0.

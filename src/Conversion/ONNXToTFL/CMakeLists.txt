@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+
+add_onnx_mlir_library(OMONNXToTFL
+  ConvertONNXToTFL.cpp
+  ONNXToTFLLegalizeUtils.cpp
+
+  Math/Elementwise.cpp
+  Math/AdditionalElementwise.cpp
+  Math/AdditionalMath.cpp
+  Math/ArgMax.cpp
+  Math/Comparison.cpp
+  Math/LegacyMath.cpp
+  Math/MatMulGemm.cpp
+  Math/ReduceMax.cpp
+  Math/ReduceMean.cpp
+  Math/ReduceSum.cpp
+  Math/Softmax.cpp
+  Math/TopK.cpp
+  Math/UncommonMath.cpp
+  NN/AveragePool.cpp
+  NN/Attention.cpp
+  NN/BatchNormalization.cpp
+  NN/Conv.cpp
+  NN/GridSample.cpp
+  NN/LayerNormalization.cpp
+  NN/LRN.cpp
+  NN/LpPool.cpp
+  NN/LSTM.cpp
+  NN/Recurrent.cpp
+  NN/MaxPool.cpp
+  NN/MaxPoolWithIndices.cpp
+  NN/StaticSampling.cpp
+  Signal/STFT.cpp
+  Tensor/Concat.cpp
+  Tensor/CompressTrilu.cpp
+  Tensor/Im2Col.cpp
+  Tensor/Constant.cpp
+  Tensor/Cast.cpp
+  Tensor/CrestereoHighRank.cpp
+  Tensor/DepthToSpace.cpp
+  Tensor/SpaceToDepth.cpp
+  Tensor/Expand.cpp
+  Tensor/Flatten.cpp
+  Tensor/Gather.cpp
+  Tensor/GatherElements.cpp
+  Tensor/GatherND.cpp
+  Tensor/ScatterElements.cpp
+  Tensor/ScatterND.cpp
+  Tensor/Sequence.cpp
+  Tensor/Pad.cpp
+  Tensor/Reshape.cpp
+  Tensor/Resize.cpp
+  Tensor/Slice.cpp
+  Tensor/Split.cpp
+  Tensor/Squeeze.cpp
+  Tensor/StaticUncommon.cpp
+  Tensor/Tile.cpp
+  Tensor/Transpose.cpp
+  Tensor/Unsqueeze.cpp
+  Tensor/UpsampleAndPad.cpp
+  Tensor/Where.cpp
+
+  LINK_LIBS PUBLIC
+  OMONNXOps
+  MLIRArithDialect
+  MLIRFuncDialect
+  MLIRTransforms
+  )

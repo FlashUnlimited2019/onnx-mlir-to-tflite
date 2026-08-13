@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Modified by FlashUnlimited2019 in 2026.
+
 //===----------- ONNXRecompose.cpp - ONNX High Level Rewriting ------------===//
 //
 // Copyright 2023 The IBM Research Authors.
@@ -279,6 +281,23 @@ struct RecomposeLayerNormFromMulPattern : public OpRewritePattern<ONNXMulOp> {
     if (!epsilonOp)
       return reportFailure("RMS epsilon needs to be a constant");
     epsilonAttr = epsilonOp.getValueFloatAttr();
+    if (!epsilonAttr) {
+      // Imported ONNX scalar initializers normally use the generic dense
+      // `value` attribute, not the legacy `value_float` field. Passing a null
+      // attribute to RMSLayerNormalization silently selects that op's 1e-5
+      // default and can therefore change the model's epsilon. Preserve the
+      // actual dense scalar value during recomposition.
+      auto denseValue =
+          mlir::dyn_cast_or_null<ElementsAttr>(epsilonOp.getValueAttr());
+      if (!denseValue || denseValue.getNumElements() != 1 ||
+          !isa<FloatType>(denseValue.getElementType()))
+        return reportFailure(
+            "RMS epsilon needs to be a scalar floating-point constant");
+      double epsilon =
+          onnx_mlir::getScalarValue<double>(denseValue, denseValue.getType());
+      epsilonAttr =
+          FloatAttr::get(Float32Type::get(epsilonOp.getContext()), epsilon);
+    }
     // Check axes.
     if (!hasShapeAndRank(dd))
       return reportFailure("RMS need rank and shape for input dd");

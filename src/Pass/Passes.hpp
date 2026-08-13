@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Modified by FlashUnlimited2019 in 2026.
+
 //===---------- Passes.hpp - ONNX-MLIR Passes Definition ------------------===//
 //
 // Copyright 2019-2024 The IBM Research Authors.
@@ -159,6 +161,9 @@ std::unique_ptr<mlir::Pass> createConvertKrnlToLLVMPass(bool verifyInputTensors,
 
 /// Pass for lowering Onnx ops to TOSA dialect
 std::unique_ptr<mlir::Pass> createConvertONNXToTOSAPass();
+
+/// Pass for lowering ONNX ops to TensorFlow Lite dialect operations.
+std::unique_ptr<mlir::Pass> createConvertONNXToTFLPass();
 
 /// Pass for lowering Onnx ops to Linalg dialect
 std::unique_ptr<mlir::Pass> createConvertONNXToLinalg();

@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Modified by FlashUnlimited2019 in 2026.
+
 //===------------------------- RegisterPasses.cpp -------------------------===//
 //
 // Copyright 2019-2026 The IBM Research Authors.
@@ -177,6 +179,10 @@ void registerOMPasses(int optLevel) {
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createConvertONNXToTOSAPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createConvertONNXToTFLPass();
   });
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
