@@ -637,6 +637,246 @@ LogicalResult lowerFullDepthConv3DAsConv2D(ONNXConvOp op,
   return success();
 }
 
+std::optional<Value> findDepthMajorRank4Source(
+    Value input, RankedTensorType inputType) {
+  ArrayRef<int64_t> shape = inputType.getShape();
+  if (shape[0] != 1)
+    return std::nullopt;
+
+  Operation *unsqueezeReshape = input.getDefiningOp();
+  if (!unsqueezeReshape ||
+      unsqueezeReshape->getName().getStringRef() != "tfl.reshape" ||
+      unsqueezeReshape->getNumOperands() < 1)
+    return std::nullopt;
+  Value logicalRank4 = unsqueezeReshape->getOperand(0);
+  auto logicalRank4Type = dyn_cast<RankedTensorType>(logicalRank4.getType());
+  if (!logicalRank4Type ||
+      logicalRank4Type.getShape() !=
+          ArrayRef<int64_t>({shape[1], shape[2], shape[3], shape[4]}))
+    return std::nullopt;
+
+  Operation *restoreLogical = logicalRank4.getDefiningOp();
+  if (!restoreLogical ||
+      restoreLogical->getName().getStringRef() != "tfl.transpose" ||
+      restoreLogical->getNumOperands() != 2)
+    return std::nullopt;
+  FailureOr<SmallVector<int64_t>> restorePermutation =
+      getConstantIntValues(restoreLogical->getOperand(1));
+  if (failed(restorePermutation) ||
+      *restorePermutation != ArrayRef<int64_t>({0, 3, 1, 2}))
+    return std::nullopt;
+
+  Value physicalRank4 = restoreLogical->getOperand(0);
+  auto physicalRank4Type = dyn_cast<RankedTensorType>(physicalRank4.getType());
+  if (!physicalRank4Type ||
+      physicalRank4Type.getShape() !=
+          ArrayRef<int64_t>({shape[1], shape[3], shape[4], shape[2]}))
+    return std::nullopt;
+  Operation *sourceTranspose = physicalRank4.getDefiningOp();
+  if (!sourceTranspose ||
+      sourceTranspose->getName().getStringRef() != "tfl.transpose" ||
+      sourceTranspose->getNumOperands() != 2)
+    return std::nullopt;
+  FailureOr<SmallVector<int64_t>> sourcePermutation =
+      getConstantIntValues(sourceTranspose->getOperand(1));
+  if (failed(sourcePermutation) ||
+      *sourcePermutation != ArrayRef<int64_t>({3, 1, 2, 0}))
+    return std::nullopt;
+
+  Value source = sourceTranspose->getOperand(0);
+  auto sourceType = dyn_cast<RankedTensorType>(source.getType());
+  if (!sourceType ||
+      sourceType.getShape() !=
+          ArrayRef<int64_t>({shape[2], shape[3], shape[4], shape[1]}))
+    return std::nullopt;
+  return source;
+}
+
+LogicalResult lowerTiledDepthConv3DAsConv2D(ONNXConvOp op,
+    ONNXConvOpAdaptor adaptor, RankedTensorType inputType,
+    RankedTensorType filterType, RankedTensorType resultType,
+    ArrayRef<int64_t> kernel, ArrayRef<int64_t> dilations,
+    ArrayRef<int64_t> strides, ArrayRef<int64_t> pads,
+    ConversionPatternRewriter &rewriter) {
+  ArrayRef<int64_t> inputShape = inputType.getShape();
+  ArrayRef<int64_t> resultShape = resultType.getShape();
+  int64_t n = inputShape[0];
+  int64_t inputChannels = inputShape[1];
+  int64_t inputHeight = inputShape[3];
+  int64_t inputWidth = inputShape[4];
+  int64_t outputChannels = filterType.getShape()[0];
+  int64_t outputDepth = resultShape[2];
+  int64_t mergedChannels = inputChannels * kernel[0];
+
+  // Split D into nonoverlapping output-depth and kernel-depth dimensions,
+  // then fold output depth into batch and kernel depth into channels. When a
+  // singleton N was introduced after a rank-4 depth-major graph input, bypass
+  // the two layout transposes. Moving D next to C allows a rank-4 reshape to
+  // split D into OD and KD*C without materializing a rank-5 activation.
+  std::optional<Value> depthMajorSource =
+      findDepthMajorRank4Source(adaptor.getX(), inputType);
+  Value input;
+  if (depthMajorSource) {
+    auto depthLastType = RankedTensorType::get(
+        {inputHeight, inputWidth, inputShape[2], inputChannels},
+        rewriter.getF32Type());
+    Value depthLastPermutation =
+        createI32ShapeConstant(rewriter, op.getLoc(), {1, 2, 0, 3});
+    Value depthLast = createTFLOperation(rewriter, op.getLoc(), "tfl.transpose",
+        TypeRange{depthLastType},
+        ValueRange{*depthMajorSource, depthLastPermutation})
+                          ->getResult(0);
+    auto splitInputType = RankedTensorType::get(
+        {inputHeight, inputWidth, outputDepth, mergedChannels},
+        rewriter.getF32Type());
+    Value splitInputShape = createI32ShapeConstant(
+        rewriter, op.getLoc(), splitInputType.getShape());
+    Value splitInput = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+        TypeRange{splitInputType}, ValueRange{depthLast, splitInputShape})
+                           ->getResult(0);
+    auto packedInputType = RankedTensorType::get(
+        {outputDepth, inputHeight, inputWidth, mergedChannels},
+        rewriter.getF32Type());
+    Value packedInputPermutation =
+        createI32ShapeConstant(rewriter, op.getLoc(), {2, 0, 1, 3});
+    input = createTFLOperation(rewriter, op.getLoc(), "tfl.transpose",
+        TypeRange{packedInputType},
+        ValueRange{splitInput, packedInputPermutation})
+                ->getResult(0);
+  } else {
+    auto splitInputType = RankedTensorType::get(
+        {n, inputChannels, outputDepth, kernel[0], inputHeight, inputWidth},
+        rewriter.getF32Type());
+    Value splitInputShape = createI32ShapeConstant(
+        rewriter, op.getLoc(), splitInputType.getShape());
+    Value splitInput = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+        TypeRange{splitInputType}, ValueRange{adaptor.getX(), splitInputShape})
+                           ->getResult(0);
+    auto orderedInputType = RankedTensorType::get(
+        {n, outputDepth, inputHeight, inputWidth, inputChannels, kernel[0]},
+        rewriter.getF32Type());
+    Value inputPermutation =
+        createI32ShapeConstant(rewriter, op.getLoc(), {0, 2, 4, 5, 1, 3});
+    Value orderedInput = createTFLOperation(rewriter, op.getLoc(),
+        "tfl.transpose", TypeRange{orderedInputType},
+        ValueRange{splitInput, inputPermutation})
+                             ->getResult(0);
+    auto packedInputType = RankedTensorType::get(
+        {n * outputDepth, inputHeight, inputWidth, mergedChannels},
+        rewriter.getF32Type());
+    Value packedInputShape = createI32ShapeConstant(
+        rewriter, op.getLoc(), packedInputType.getShape());
+    input = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+        TypeRange{packedInputType}, ValueRange{orderedInput, packedInputShape})
+                ->getResult(0);
+  }
+
+  StringRef padding = op.getAutoPad() == "SAME_UPPER" ? "SAME" : "VALID";
+  if (op.getAutoPad() == "NOTSET") {
+    SmallVector<int64_t> pads2D{pads[1], pads[2], pads[4], pads[5]};
+    FailureOr<Value> padded = padConv2DInput(op, input, pads2D, rewriter);
+    if (failed(padded))
+      return failure();
+    input = *padded;
+  }
+
+  // OIDHW becomes OHW(DI) for the rank-4 input path and OHW(ID) for the
+  // generic path. This transform is folded into a constant by the TFL
+  // optimization pipeline when the ONNX filter is an initializer.
+  SmallVector<int64_t> orderedFilterShape;
+  SmallVector<int64_t> filterPermutation;
+  if (depthMajorSource) {
+    orderedFilterShape = {
+        outputChannels, kernel[1], kernel[2], kernel[0], inputChannels};
+    filterPermutation = {0, 3, 4, 2, 1};
+  } else {
+    orderedFilterShape = {
+        outputChannels, kernel[1], kernel[2], inputChannels, kernel[0]};
+    filterPermutation = {0, 3, 4, 1, 2};
+  }
+  auto orderedFilterType =
+      RankedTensorType::get(orderedFilterShape, rewriter.getF32Type());
+  Value filterPermutationValue =
+      createI32ShapeConstant(rewriter, op.getLoc(), filterPermutation);
+  Value orderedFilter = createTFLOperation(rewriter, op.getLoc(),
+      "tfl.transpose", TypeRange{orderedFilterType},
+      ValueRange{adaptor.getW(), filterPermutationValue})
+                            ->getResult(0);
+  auto packedFilterType = RankedTensorType::get(
+      {outputChannels, kernel[1], kernel[2], mergedChannels},
+      rewriter.getF32Type());
+  Value packedFilterShape = createI32ShapeConstant(
+      rewriter, op.getLoc(), packedFilterType.getShape());
+  Value filter = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+      TypeRange{packedFilterType}, ValueRange{orderedFilter, packedFilterShape})
+                     ->getResult(0);
+
+  FailureOr<Value> bias =
+      getOrCreateConvBias(op, adaptor.getB(), outputChannels, rewriter);
+  if (failed(bias))
+    return failure();
+  SmallVector<NamedAttribute> attributes = getConv2DAttributes(
+      rewriter, dilations[1], dilations[2], padding, strides[1], strides[2]);
+  auto convType = RankedTensorType::get(
+      {n * outputDepth, resultShape[3], resultShape[4], outputChannels},
+      rewriter.getF32Type());
+  Value conv = createTFLOperation(rewriter, op.getLoc(), "tfl.conv_2d",
+      TypeRange{convType}, ValueRange{input, filter, *bias}, attributes)
+                   ->getResult(0);
+
+  // Fuse the common N,O,D,H,W -> N,O,DHW -> N,DHW,O consumer chain. Conv2D
+  // already produces N,D,H,W,O order, so only one metadata reshape is needed.
+  ONNXReshapeOp flatten;
+  ONNXTransposeOp transpose;
+  if (op.getY().hasOneUse()) {
+    flatten = dyn_cast<ONNXReshapeOp>(*op.getY().user_begin());
+    if (flatten && flatten->getResult(0).hasOneUse())
+      transpose =
+          dyn_cast<ONNXTransposeOp>(*flatten->getResult(0).user_begin());
+  }
+  int64_t tokens = outputDepth * resultShape[3] * resultShape[4];
+  auto flattenType =
+      flatten ? dyn_cast<RankedTensorType>(flatten->getResult(0).getType())
+              : RankedTensorType();
+  auto transposeType = transpose
+                           ? dyn_cast<RankedTensorType>(transpose.getType())
+                           : RankedTensorType();
+  SmallVector<int64_t> transposePermutation =
+      transpose ? getI64ArrayOr(transpose, "perm", {}) : SmallVector<int64_t>();
+  if (flattenType && transposeType &&
+      flattenType.getShape() ==
+          ArrayRef<int64_t>({n, outputChannels, tokens}) &&
+      transposeType.getShape() ==
+          ArrayRef<int64_t>({n, tokens, outputChannels}) &&
+      transposePermutation == ArrayRef<int64_t>({0, 2, 1})) {
+    Value outputShape =
+        createI32ShapeConstant(rewriter, op.getLoc(), transposeType.getShape());
+    Value output = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+        TypeRange{transposeType}, ValueRange{conv, outputShape})
+                       ->getResult(0);
+    rewriter.replaceOp(transpose, output);
+    rewriter.eraseOp(flatten);
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  auto orderedOutputType = RankedTensorType::get(
+      {n, outputDepth, resultShape[3], resultShape[4], outputChannels},
+      rewriter.getF32Type());
+  Value orderedOutputShape = createI32ShapeConstant(
+      rewriter, op.getLoc(), orderedOutputType.getShape());
+  Value orderedOutput = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+      TypeRange{orderedOutputType}, ValueRange{conv, orderedOutputShape})
+                            ->getResult(0);
+  Value outputPermutation =
+      createI32ShapeConstant(rewriter, op.getLoc(), {0, 4, 1, 2, 3});
+  Value output = createTFLOperation(rewriter, op.getLoc(), "tfl.transpose",
+      TypeRange{resultType}, ValueRange{orderedOutput, outputPermutation})
+                     ->getResult(0);
+  rewriter.replaceOp(op, output);
+  return success();
+}
+
 LogicalResult lowerConv3D(ONNXConvOp op, ONNXConvOpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) {
   auto inputType = dyn_cast<RankedTensorType>(op.getX().getType());
@@ -696,6 +936,15 @@ LogicalResult lowerConv3D(ONNXConvOp op, ONNXConvOpAdaptor adaptor,
   if (group == 1 && resultType.getShape()[2] == 1 && dilations[0] == 1 &&
       kernel[0] == inputType.getShape()[2] && depthPaddingIsZero)
     return lowerFullDepthConv3DAsConv2D(op, adaptor, inputType, filterType,
+        resultType, kernel, dilations, strides, pads, rewriter);
+
+  // Nonoverlapping depth windows can be evaluated as one batched Conv2D by
+  // folding each window into the channel dimension. Require exact tiling so
+  // no Slice or padding operator is introduced by the rank reduction.
+  if (group == 1 && kernel[0] > 1 && dilations[0] == 1 &&
+      strides[0] == kernel[0] && depthPaddingIsZero &&
+      inputType.getShape()[2] == resultType.getShape()[2] * kernel[0])
+    return lowerTiledDepthConv3DAsConv2D(op, adaptor, inputType, filterType,
         resultType, kernel, dilations, strides, pads, rewriter);
 
   // Prefer an exact rank reduction. Additional Conv3D-to-lower-rank rules can

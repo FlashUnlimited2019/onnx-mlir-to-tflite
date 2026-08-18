@@ -26,14 +26,15 @@ public:
     bool supportedElementType =
         sourceDataType && sourceResultType &&
         (sourceDataType.getElementType().isF32() ||
+            sourceDataType.getElementType().isInteger(1) ||
             sourceDataType.getElementType().isSignlessInteger(64)) &&
         sourceResultType.getElementType() == sourceDataType.getElementType();
     if (!sourceDataType || !sourceResultType ||
         !sourceDataType.hasStaticShape() ||
         !sourceResultType.hasStaticShape() || sourceResultType.getRank() < 1 ||
         !supportedElementType) {
-      op.emitError("ONNXToTFL Reshape requires static same-type FP32 or i64 "
-                   "data/result and result rank >= 1");
+      op.emitError("ONNXToTFL Reshape requires static same-type bool, FP32, "
+                   "or i64 data/result and result rank >= 1");
       return failure();
     }
 

@@ -118,7 +118,7 @@ public:
     // Both the input and output of an ONNX rank-4 Transpose are represented
     // physically as NHWC. Translate the logical NCHW permutation into the
     // equivalent permutation between those physical layouts.
-    if (rank == 4) {
+    if (rank == 4 && inputType.getElementType().isF32()) {
       constexpr int64_t physicalToLogical[] = {0, 2, 3, 1};
       SmallVector<int64_t> physicalPermutation(4);
       for (int64_t physicalAxis = 0; physicalAxis < 4; ++physicalAxis) {

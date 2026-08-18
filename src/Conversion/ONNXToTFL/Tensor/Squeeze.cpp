@@ -19,12 +19,16 @@ public:
       ConversionPatternRewriter &rewriter) const override {
     auto sourceDataType = dyn_cast<RankedTensorType>(op.getData().getType());
     auto sourceResultType = dyn_cast<RankedTensorType>(op.getType());
-    if (!sourceDataType || !sourceResultType ||
-        failed(validateStaticF32Tensor(
-            op, adaptor.getData().getType(), "Squeeze data")) ||
-        failed(validateStaticF32TensorOrScalar(
-            op, sourceResultType, "Squeeze result")))
-      return failure();
+    bool supported =
+        sourceDataType && sourceResultType && sourceDataType.hasStaticShape() &&
+        sourceResultType.hasStaticShape() &&
+        sourceDataType.getElementType() == sourceResultType.getElementType() &&
+        (sourceDataType.getElementType().isF32() ||
+            sourceDataType.getElementType().isInteger(1));
+    if (!supported)
+      return op.emitError("ONNXToTFL Squeeze requires matching static FP32 "
+                          "or boolean data/result tensors"),
+             failure();
 
     int64_t dataRank = sourceDataType.getRank();
     SmallVector<bool> removedAxes(dataRank, false);
@@ -57,7 +61,8 @@ public:
     }
 
     Value data = adaptor.getData();
-    if (dataRank == 4) {
+    bool isF32 = sourceDataType.getElementType().isF32();
+    if (isF32 && dataRank == 4) {
       Value permutation =
           createI32ShapeConstant(rewriter, op.getLoc(), {0, 3, 1, 2});
       data = createTFLOperation(rewriter, op.getLoc(), "tfl.transpose",
@@ -70,7 +75,7 @@ public:
     Value logicalResult = createTFLOperation(rewriter, op.getLoc(),
         "tfl.reshape", TypeRange{sourceResultType}, ValueRange{data, shape})
                               ->getResult(0);
-    if (sourceResultType.getRank() != 4) {
+    if (!isF32 || sourceResultType.getRank() != 4) {
       rewriter.replaceOp(op, logicalResult);
       return success();
     }

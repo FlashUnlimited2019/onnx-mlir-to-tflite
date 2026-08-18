@@ -90,30 +90,32 @@ std::string joinValueNames(func::FuncOp function, bool result) {
   return joined;
 }
 
-LogicalResult validateEntryInput(Operation *op, Type type) {
+LogicalResult validateEntryTensor(Operation *op, Type type, StringRef role) {
   auto tensorType = dyn_cast<RankedTensorType>(type);
   if (!tensorType) {
     return op->emitError()
            << "dynamic or unranked tensor shape is not supported by "
-              "ONNXToTFL MVP (function input)";
+              "ONNXToTFL MVP ("
+           << role << ")";
   }
   if (!tensorType.hasStaticShape()) {
     return op->emitError()
            << "dynamic tensor shape is not supported by ONNXToTFL MVP "
-              "(function input: "
-           << type << ")";
+              "("
+           << role << ": " << type << ")";
   }
   if (tensorType.getRank() < 1) {
-    return op->emitError()
-           << "ONNXToTFL MVP requires activation rank >= 1 (function input)";
+    return op->emitError() << "ONNXToTFL MVP requires activation rank >= 1 ("
+                           << role << ")";
   }
   Type elementType = tensorType.getElementType();
-  if (!elementType.isF32() && !elementType.isSignlessInteger(32) &&
+  if (!elementType.isF32() && !elementType.isInteger(1) &&
+      !elementType.isSignlessInteger(32) &&
       !elementType.isSignlessInteger(64)) {
     return op->emitError()
-           << "ONNXToTFL MVP only supports f32, i32, or i64 function input "
-              "tensors (function input: "
-           << type << ")";
+           << "ONNXToTFL MVP only supports bool, f32, i32, or i64 entry "
+              "tensors ("
+           << role << ": " << type << ")";
   }
   return success();
 }
@@ -146,11 +148,11 @@ LogicalResult prepareEntryPoint(ModuleOp module) {
   }
 
   for (Type type : function.getArgumentTypes()) {
-    if (failed(validateEntryInput(function, type)))
+    if (failed(validateEntryTensor(function, type, "function input")))
       return failure();
   }
   for (Type type : function.getResultTypes()) {
-    if (failed(validateStaticF32Tensor(function, type, "function output")))
+    if (failed(validateEntryTensor(function, type, "function output")))
       return failure();
   }
 

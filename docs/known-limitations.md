@@ -103,13 +103,19 @@
   dimension is 1, that axis has stride 1, and its explicit begin/end padding
   is zero. A group-1 Conv3D is also reduced when the depth kernel covers the
   complete unpadded input depth and produces one depth output: channel and
-  depth are merged into the Conv2D input-channel dimension. Otherwise it is
-  emitted as builtin TFLite Conv3D using local
-  NCDHW/NDHWC transposes. Grouped and depthwise Conv3D are decomposed into
-  multiple ordinary Conv3D operations because the TFL Conv3D verifier requires
-  full input-channel filters. Explicit padding and `SAME_LOWER` are
-  materialized as rank-5 Pad plus VALID Conv3D. Dynamic shapes remain
-  unsupported, and target runtimes must provide the TFLite `CONV_3D` builtin.
+  depth are merged into the Conv2D input-channel dimension. Group-1 depth
+  windows are likewise folded into Conv2D batch/channels when they exactly
+  tile the input, use unit dilation and zero depth padding, and have depth
+  stride equal to the depth kernel. A compatible rank-4 depth-major input
+  layout chain is bypassed so the packing intermediates stay at rank 4. A
+  following spatial flatten and token transpose is fused into one output
+  Reshape when its shapes match. Otherwise Conv3D is emitted as the builtin
+  TFLite operation using local NCDHW/NDHWC transposes. Grouped and depthwise
+  Conv3D are decomposed into multiple ordinary Conv3D operations because the
+  TFL Conv3D verifier requires full input-channel filters. Explicit padding
+  and `SAME_LOWER` are materialized as rank-5 Pad plus VALID Conv3D. Dynamic
+  shapes remain unsupported, and target runtimes must provide the TFLite
+  `CONV_3D` builtin.
   ConvTranspose is supported through the importer's UpsampleAndPad plus Conv
   decomposition for static rank-3/4 FP32. A static rank-5 form is also
   accepted when one spatial axis is an unchanged singleton with stride 1 and
@@ -205,13 +211,15 @@
   elimination intended for small nonsingular matrices. These paths emit no
   dynamic control flow, but their generated constant/index tensors can grow
   quickly with larger shapes.
-- GatherND likewise requires static FP32 data/result ranks 1-5 and static-shape
-  i32/i64 indices. Constant and runtime negative indices are normalized;
-  valid nonnegative `batch_dims` are represented by prefixing full i32 batch
-  coordinates. Rank-5 runtime index normalization is flattened to rank 1 so it
-  does not depend on TFLite's four-dimensional comparison broadcast helper.
-  Scalar results, zero-sized dimensions, and data/result ranks
-  above 5 are not implemented; large coordinate tensors can increase
+- GatherND requires static data/result ranks 1-5 and static-shape i32/i64
+  indices. A constant full-coordinate traversal in row-major order is reduced
+  to Reshape and supports matching data/result element types; the general
+  GatherNd path requires FP32. Constant and runtime negative indices are
+  normalized; valid nonnegative `batch_dims` are represented by prefixing full
+  i32 batch coordinates. Rank-5 runtime index normalization is flattened to
+  rank 1 so it does not depend on TFLite's four-dimensional comparison
+  broadcast helper. Scalar results, zero-sized dimensions, and data/result
+  ranks above 5 are not implemented; large coordinate tensors can increase
   FlatBuffer size.
 - InstanceNormalization is supported through an importer-produced
   LayerNormalization form: static rank-4 FP32, spatial

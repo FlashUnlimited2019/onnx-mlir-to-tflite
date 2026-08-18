@@ -20,12 +20,21 @@ public:
   LogicalResult matchAndRewrite(ONNXSliceOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     Value data = adaptor.getData();
-    if (failed(validateStaticF32Tensor(op, data.getType(), "data")) ||
-        failed(
-            validateStaticF32Tensor(op, op->getResult(0).getType(), "result")))
-      return failure();
+    auto sourceType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+    auto sourceResultType =
+        dyn_cast<RankedTensorType>(op->getResult(0).getType());
+    bool supported =
+        sourceType && sourceResultType && sourceType.hasStaticShape() &&
+        sourceResultType.hasStaticShape() &&
+        sourceType.getElementType() == sourceResultType.getElementType() &&
+        (sourceType.getElementType().isF32() ||
+            sourceType.getElementType().isInteger(1));
+    if (!supported)
+      return op.emitError("ONNXToTFL Slice requires matching static FP32 or "
+                          "boolean data/result tensors"),
+             failure();
 
-    auto sourceType = cast<RankedTensorType>(op->getOperand(0).getType());
+    bool isF32 = sourceType.getElementType().isF32();
     int64_t rank = sourceType.getRank();
     FailureOr<SmallVector<int64_t>> starts =
         getConstantIntValues(op.getStarts());
@@ -166,7 +175,7 @@ public:
     }
     if (!collapsedAxes.empty()) {
       auto compactInputType =
-          RankedTensorType::get(compactInputShape, rewriter.getF32Type());
+          RankedTensorType::get(compactInputShape, sourceType.getElementType());
       Value compactShape =
           createI32ShapeConstant(rewriter, op.getLoc(), compactInputShape);
       data = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
@@ -174,7 +183,7 @@ public:
                  ->getResult(0);
     }
 
-    if (rank == 4) {
+    if (isF32 && rank == 4) {
       SmallVector<int64_t> physicalBegin(4), physicalEnd(4), physicalSize(4),
           physicalStride(4);
       for (int64_t logicalAxis = 0; logicalAxis < 4; ++logicalAxis) {
@@ -199,8 +208,8 @@ public:
           cast<RankedTensorType>(op->getResult(0).getType()).getShape());
       for (int64_t axis : collapsedAxes)
         compactResultShape.erase(compactResultShape.begin() + axis);
-      resultType =
-          RankedTensorType::get(compactResultShape, rewriter.getF32Type());
+      resultType = RankedTensorType::get(
+          compactResultShape, sourceType.getElementType());
     }
     if (!llvm::equal(size, resultType.getShape())) {
       op.emitError("Slice parameters do not match the inferred result shape");

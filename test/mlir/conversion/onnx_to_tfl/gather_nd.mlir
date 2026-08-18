@@ -91,3 +91,22 @@ module {
 // CHECK: "tfl.reshape"{{.*}} : (tensor<6xi32>, tensor<5xi32>) -> tensor<1x2x3x1x1xi32>
 // CHECK: "tfl.concatenation"{{.*}} {axis = 4 : i32, fused_activation_function = "NONE"} : (tensor<1x2x3x1x3xi32>, tensor<1x2x3x1x1xi32>) -> tensor<1x2x3x1x4xi32>
 // CHECK: "tfl.gather_nd"{{.*}} : (tensor<1x2x3x4x5xf32>, tensor<1x2x3x1x4xi32>) -> tensor<1x2x3x1x5xf32>
+
+// -----
+
+module {
+  func.func @gather_nd_identity_reshape_i1(%input: tensor<1x4xi64>) -> tensor<1x1x1x4xf32> {
+    %data = "onnx.Cast"(%input) <{saturate = 1 : si64, to = i1}> : (tensor<1x4xi64>) -> tensor<1x4xi1>
+    %indices = "onnx.Constant"() {value = dense<[[[[[0, 0], [0, 1], [0, 2], [0, 3]]]]]> : tensor<1x1x1x4x2xi64>} : () -> tensor<1x1x1x4x2xi64>
+    %0 = "onnx.GatherND"(%data, %indices) <{batch_dims = 0 : si64}> : (tensor<1x4xi1>, tensor<1x1x1x4x2xi64>) -> tensor<1x1x1x4xi1>
+    %1 = "onnx.Cast"(%0) <{saturate = 1 : si64, to = f32}> : (tensor<1x1x1x4xi1>) -> tensor<1x1x1x4xf32>
+    return %1 : tensor<1x1x1x4xf32>
+  }
+  "onnx.EntryPoint"() {func = @gather_nd_identity_reshape_i1} : () -> ()
+}
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4xi64>) -> tensor<1x1x4x1xf32>
+// CHECK: "tfl.cast"(%arg0) : (tensor<1x4xi64>) -> tensor<1x4xi1>
+// CHECK: "tfl.reshape"({{.*}}, {{.*}}) : (tensor<1x4xi1>, tensor<4xi32>) -> tensor<1x1x1x4xi1>
+// CHECK: "tfl.cast"{{.*}} : (tensor<1x1x1x4xi1>) -> tensor<1x1x1x4xf32>
+// CHECK: "tfl.transpose"{{.*}} : (tensor<1x1x1x4xf32>, tensor<4xi32>) -> tensor<1x1x4x1xf32>
+// CHECK-NOT: "tfl.gather_nd"

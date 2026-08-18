@@ -6,6 +6,8 @@
 
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
+#include <algorithm>
+
 using namespace mlir;
 
 namespace onnx_mlir {
@@ -372,14 +374,83 @@ public:
   using OpAdaptor = typename ONNXOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    auto lhsType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+    auto rhsType = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
     auto resultType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
-    if (!resultType || !resultType.hasStaticShape() ||
+    if (!lhsType || !rhsType || !resultType || !lhsType.hasStaticShape() ||
+        !rhsType.hasStaticShape() || !resultType.hasStaticShape() ||
+        !lhsType.getElementType().isInteger(1) ||
+        !rhsType.getElementType().isInteger(1) ||
         !resultType.getElementType().isInteger(1))
       return op.emitError("ONNXToTFL logical operation requires a static "
-                          "boolean result"),
+                          "boolean inputs and result"),
              failure();
+
+    int64_t resultRank = std::max(lhsType.getRank(), rhsType.getRank());
+    if (resultRank > 5 || resultType.getRank() != resultRank)
+      return op.emitError("ONNXToTFL logical operation supports ranks up to 5"),
+             failure();
+    SmallVector<int64_t> expectedShape(resultRank, 1);
+    for (int64_t offset = 0; offset < resultRank; ++offset) {
+      int64_t lhsAxis = lhsType.getRank() - 1 - offset;
+      int64_t rhsAxis = rhsType.getRank() - 1 - offset;
+      int64_t lhsDim = lhsAxis >= 0 ? lhsType.getShape()[lhsAxis] : int64_t{1};
+      int64_t rhsDim = rhsAxis >= 0 ? rhsType.getShape()[rhsAxis] : int64_t{1};
+      if (lhsDim != 1 && rhsDim != 1 && lhsDim != rhsDim)
+        return op.emitError(
+                   "logical operation operands are not broadcast-compatible"),
+               failure();
+      expectedShape[resultRank - 1 - offset] = std::max(lhsDim, rhsDim);
+    }
+    if (!llvm::equal(expectedShape, resultType.getShape()))
+      return op.emitError(
+                 "logical operation result shape does not match broadcasting"),
+             failure();
+
+    Value lhs = adaptor.getOperands()[0];
+    Value rhs = adaptor.getOperands()[1];
+    if (resultRank > 4) {
+      int64_t elementCount = resultType.getNumElements();
+      auto flattenOperand = [&](Value value,
+                                RankedTensorType operandType) -> Value {
+        SmallVector<int64_t> alignedShape(resultRank, 1);
+        std::copy(operandType.getShape().begin(), operandType.getShape().end(),
+            alignedShape.end() - operandType.getRank());
+        if (!llvm::equal(alignedShape, expectedShape)) {
+          auto broadcastType = RankedTensorType::get(
+              expectedShape, operandType.getElementType());
+          Value broadcastShape =
+              createI32ShapeConstant(rewriter, op.getLoc(), expectedShape);
+          value = createTFLOperation(rewriter, op.getLoc(), "tfl.broadcast_to",
+              TypeRange{broadcastType}, ValueRange{value, broadcastShape})
+                      ->getResult(0);
+        }
+        auto flatType =
+            RankedTensorType::get({elementCount}, operandType.getElementType());
+        Value flatShape =
+            createI32ShapeConstant(rewriter, op.getLoc(), {elementCount});
+        return createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+            TypeRange{flatType}, ValueRange{value, flatShape})
+            ->getResult(0);
+      };
+      lhs = flattenOperand(lhs, lhsType);
+      rhs = flattenOperand(rhs, rhsType);
+      auto flatResultType =
+          RankedTensorType::get({elementCount}, resultType.getElementType());
+      Value flatResult = createTFLOperation(rewriter, op.getLoc(), tflName,
+          TypeRange{flatResultType}, ValueRange{lhs, rhs})
+                             ->getResult(0);
+      Value resultShape =
+          createI32ShapeConstant(rewriter, op.getLoc(), resultType.getShape());
+      Value result = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+          TypeRange{resultType}, ValueRange{flatResult, resultShape})
+                         ->getResult(0);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     Value result = createTFLOperation(rewriter, op.getLoc(), tflName,
-        TypeRange{resultType}, adaptor.getOperands())
+        TypeRange{resultType}, ValueRange{lhs, rhs})
                        ->getResult(0);
     rewriter.replaceOp(op, result);
     return success();

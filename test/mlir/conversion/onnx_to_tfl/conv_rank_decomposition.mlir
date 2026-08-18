@@ -40,6 +40,48 @@ module {
 // -----
 
 module {
+  func.func @main_graph(%input: tensor<4x2x6x8xf32>, %filter: tensor<3x2x2x3x4xf32>, %bias: tensor<3xf32>) -> tensor<1x8x3xf32> {
+    %0 = "onnx.Transpose"(%input) {perm = [1, 0, 2, 3]} : (tensor<4x2x6x8xf32>) -> tensor<2x4x6x8xf32>
+    %axes = "onnx.Constant"() {value = dense<[0]> : tensor<1xi64>} : () -> tensor<1xi64>
+    %1 = "onnx.Unsqueeze"(%0, %axes) : (tensor<2x4x6x8xf32>, tensor<1xi64>) -> tensor<1x2x4x6x8xf32>
+    %2 = "onnx.Conv"(%1, %filter, %bias) {auto_pad = "NOTSET", dilations = [1, 1, 1], group = 1 : si64, kernel_shape = [2, 3, 4], pads = [0, 0, 0, 0, 0, 0], strides = [2, 3, 4]} : (tensor<1x2x4x6x8xf32>, tensor<3x2x2x3x4xf32>, tensor<3xf32>) -> tensor<1x3x2x2x2xf32>
+    %shape = "onnx.Constant"() {value = dense<[1, 3, 8]> : tensor<3xi64>} : () -> tensor<3xi64>
+    %3 = "onnx.Reshape"(%2, %shape) {allowzero = 0 : si64} : (tensor<1x3x2x2x2xf32>, tensor<3xi64>) -> tensor<1x3x8xf32>
+    %4 = "onnx.Transpose"(%3) {perm = [0, 2, 1]} : (tensor<1x3x8xf32>) -> tensor<1x8x3xf32>
+    return %4 : tensor<1x8x3xf32>
+  }
+  "onnx.EntryPoint"() {func = @main_graph} : () -> ()
+}
+// CHECK-LABEL: func.func @main(%arg0: tensor<4x6x8x2xf32>
+// CHECK: %[[DEPTH_LAST:.*]] = "tfl.transpose"(%arg0, {{.*}}) : (tensor<4x6x8x2xf32>, tensor<4xi32>) -> tensor<6x8x4x2xf32>
+// CHECK: %[[SPLIT:.*]] = "tfl.reshape"(%[[DEPTH_LAST]], {{.*}}) : (tensor<6x8x4x2xf32>, tensor<4xi32>) -> tensor<6x8x2x4xf32>
+// CHECK: %[[PACKED:.*]] = "tfl.transpose"(%[[SPLIT]], {{.*}}) : (tensor<6x8x2x4xf32>, tensor<4xi32>) -> tensor<2x6x8x4xf32>
+// CHECK: "tfl.transpose"{{.*}}tensor<3x3x4x2x2xf32>
+// CHECK: "tfl.reshape"{{.*}}tensor<3x3x4x4xf32>
+// CHECK: "tfl.conv_2d"(%[[PACKED]], {{.*}}){{.*}}tensor<2x2x2x3xf32>
+// CHECK: "tfl.reshape"{{.*}}tensor<1x8x3xf32>
+// CHECK-NOT: "tfl.conv_3d"
+// CHECK-NOT: onnx.Conv
+
+// -----
+
+module {
+  func.func @main_graph(%input: tensor<1x2x4x6x8xf32>, %filter: tensor<3x2x2x3x4xf32>, %bias: tensor<3xf32>) -> tensor<1x3x2x2x2xf32> {
+    %0 = "onnx.Conv"(%input, %filter, %bias) {auto_pad = "NOTSET", dilations = [1, 1, 1], group = 1 : si64, kernel_shape = [2, 3, 4], pads = [0, 0, 0, 0, 0, 0], strides = [2, 3, 4]} : (tensor<1x2x4x6x8xf32>, tensor<3x2x2x3x4xf32>, tensor<3xf32>) -> tensor<1x3x2x2x2xf32>
+    return %0 : tensor<1x3x2x2x2xf32>
+  }
+  "onnx.EntryPoint"() {func = @main_graph} : () -> ()
+}
+// CHECK-LABEL: func.func @main
+// CHECK: "tfl.conv_2d"{{.*}}tensor<2x2x2x3xf32>
+// CHECK: "tfl.reshape"{{.*}}tensor<1x2x2x2x3xf32>
+// CHECK: "tfl.transpose"{{.*}}tensor<1x3x2x2x2xf32>
+// CHECK-NOT: "tfl.conv_3d"
+// CHECK-NOT: onnx.Conv
+
+// -----
+
+module {
   func.func @main_graph(%input: tensor<1x4x8xf32>, %filter: tensor<6x2x5xf32>, %bias: tensor<6xf32>) -> tensor<1x6x8xf32> {
     %0 = "onnx.Conv"(%input, %filter, %bias) {auto_pad = "NOTSET", dilations = [1], group = 2 : si64, kernel_shape = [5], pads = [2, 2], strides = [1]} : (tensor<1x4x8xf32>, tensor<6x2x5xf32>, tensor<6xf32>) -> tensor<1x6x8xf32>
     return %0 : tensor<1x6x8xf32>

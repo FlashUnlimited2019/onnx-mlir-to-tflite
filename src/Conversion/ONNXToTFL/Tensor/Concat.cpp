@@ -21,16 +21,24 @@ public:
       op.emitError("Concat requires at least one input");
       return failure();
     }
-    for (auto [index, input] : llvm::enumerate(inputs)) {
-      if (failed(validateStaticF32Tensor(
-              op, input.getType(), (Twine("input ") + Twine(index)).str())))
-        return failure();
+    auto resultType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+    if (!resultType || !resultType.hasStaticShape() ||
+        (!resultType.getElementType().isF32() &&
+            !resultType.getElementType().isInteger(1)))
+      return op.emitError(
+                 "Concat requires a static FP32 or boolean result tensor"),
+             failure();
+    for (Type type : op->getOperandTypes()) {
+      auto inputType = dyn_cast<RankedTensorType>(type);
+      if (!inputType || !inputType.hasStaticShape() ||
+          inputType.getElementType() != resultType.getElementType() ||
+          inputType.getRank() != resultType.getRank())
+        return op.emitError("Concat requires matching static FP32 or boolean "
+                            "input/result tensors"),
+               failure();
     }
-    if (failed(
-            validateStaticF32Tensor(op, op->getResult(0).getType(), "result")))
-      return failure();
 
-    int64_t rank = cast<RankedTensorType>(inputs[0].getType()).getRank();
+    int64_t rank = resultType.getRank();
     auto axisAttr = op->getAttrOfType<IntegerAttr>("axis");
     if (!axisAttr) {
       op.emitError("Concat requires an axis attribute");
@@ -42,7 +50,7 @@ public:
       op.emitError() << "unsupported Concat axis " << rawAxis;
       return failure();
     }
-    if (rank == 4)
+    if (rank == 4 && resultType.getElementType().isF32())
       axis = mapNCHWAxisToNHWC(axis);
 
     SmallVector<NamedAttribute> attributes{

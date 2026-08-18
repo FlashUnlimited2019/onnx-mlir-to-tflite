@@ -72,14 +72,14 @@ def parse_integer_input_ranges(specifications: list[str]) -> dict[str, tuple[int
 
 
 def onnx_to_tfl_input(value: np.ndarray) -> np.ndarray:
-    """Rank-4 activations are NHWC in TFLite; all other ranks are unchanged."""
-    if value.ndim == 4:
+    """Rank-4 FP32 activations are NHWC; other supported types stay logical."""
+    if value.ndim == 4 and value.dtype == np.float32:
         return np.transpose(value, (0, 2, 3, 1))
     return value
 
 
 def tfl_to_onnx_output(value: np.ndarray) -> np.ndarray:
-    if value.ndim == 4:
+    if value.ndim == 4 and value.dtype == np.float32:
         return np.transpose(value, (0, 3, 1, 2))
     return value
 
@@ -132,6 +132,7 @@ def main() -> int:
             initializer.name for initializer in model.graph.initializer
         }
         type_names = {
+            onnx.TensorProto.BOOL: "tensor(bool)",
             onnx.TensorProto.FLOAT: "tensor(float)",
             onnx.TensorProto.INT32: "tensor(int32)",
             onnx.TensorProto.INT64: "tensor(int64)",
@@ -168,9 +169,14 @@ def main() -> int:
         baseline_name = "ONNX Runtime"
     ort_inputs: dict[str, np.ndarray] = {}
     for metadata in input_metadata:
-        if metadata.type not in {"tensor(float)", "tensor(int32)", "tensor(int64)"}:
+        if metadata.type not in {
+            "tensor(bool)",
+            "tensor(float)",
+            "tensor(int32)",
+            "tensor(int64)",
+        }:
             raise ValueError(
-                f"only FP32, i32, and i64 inputs are supported: "
+                f"only bool, FP32, i32, and i64 inputs are supported: "
                 f"{metadata.name} {metadata.type}"
             )
         if any(not isinstance(dim, int) or dim <= 0 for dim in metadata.shape):
@@ -182,6 +188,11 @@ def main() -> int:
             ort_inputs[metadata.name] = rng.normal(
                 args.mean, args.stddev, metadata.shape
             ).astype(np.float32)
+            continue
+        if metadata.type == "tensor(bool)":
+            ort_inputs[metadata.name] = rng.integers(
+                0, 2, metadata.shape, dtype=np.int8
+            ).astype(np.bool_)
             continue
         if metadata.name not in integer_ranges:
             raise ValueError(
@@ -205,8 +216,9 @@ def main() -> int:
         )
 
     print(
-        f"random input: seed={args.seed}, normal(mean={args.mean}, "
-        f"stddev={args.stddev}); baseline={baseline_name}"
+        f"random input: seed={args.seed}, FP32 normal(mean={args.mean}, "
+        f"stddev={args.stddev}), bool Bernoulli(p=0.5); "
+        f"baseline={baseline_name}"
     )
     for ort_metadata, tfl_metadata in zip(input_metadata, tfl_inputs):
         onnx_value = ort_inputs[ort_metadata.name]
@@ -272,6 +284,14 @@ def main() -> int:
 
         print(f"output {metadata.name}:")
         print(f"  shape: {expected.shape}, dtype: {expected.dtype}")
+        if expected.dtype == np.bool_:
+            mismatches = int(np.count_nonzero(expected != actual))
+            print(
+                f"  exact matches: {expected.size - mismatches}/{expected.size} "
+                f"(mismatches={mismatches})"
+            )
+            if mismatches != 0:
+                failed = True
         print(f"  cosine similarity: {cosine:.16g}")
         print(f"  euclidean distance: {euclidean:.16g}")
         print(f"  relative euclidean distance: {relative_euclidean:.16g}")

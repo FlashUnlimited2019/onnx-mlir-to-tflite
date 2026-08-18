@@ -13,6 +13,77 @@ using namespace mlir;
 namespace onnx_mlir {
 namespace {
 
+// A constant GatherND that visits every input element exactly once in
+// row-major order only changes the tensor shape. Recognizing this form also
+// avoids imposing GatherNd's element-type restrictions on a pure reshape.
+static bool isRowMajorReshapeGather(RankedTensorType dataType,
+    RankedTensorType indicesType, RankedTensorType resultType,
+    int64_t batchDims, ArrayRef<int64_t> indexValues) {
+  if (!dataType.hasStaticShape() || !indicesType.hasStaticShape() ||
+      !resultType.hasStaticShape() ||
+      dataType.getElementType() != resultType.getElementType())
+    return false;
+
+  int64_t dataRank = dataType.getRank();
+  int64_t indicesRank = indicesType.getRank();
+  int64_t resultRank = resultType.getRank();
+  if (dataRank < 1 || dataRank > 5 || indicesRank < 1 || indicesRank > 5 ||
+      resultRank < 1 || resultRank > 5 || batchDims < 0 ||
+      batchDims > indicesRank - 1 || batchDims >= dataRank)
+    return false;
+
+  ArrayRef<int64_t> dataShape = dataType.getShape();
+  ArrayRef<int64_t> indicesShape = indicesType.getShape();
+  if (llvm::any_of(dataShape, [](int64_t dim) { return dim <= 0; }) ||
+      llvm::any_of(indicesShape, [](int64_t dim) { return dim <= 0; }))
+    return false;
+  for (int64_t dimension = 0; dimension < batchDims; ++dimension)
+    if (indicesShape[dimension] != dataShape[dimension])
+      return false;
+
+  int64_t indexDepth = indicesShape.back();
+  if (batchDims + indexDepth != dataRank ||
+      indexValues.size() != static_cast<size_t>(indicesType.getNumElements()))
+    return false;
+
+  SmallVector<int64_t> expectedResultShape(
+      indicesShape.begin(), indicesShape.end() - 1);
+  if (!llvm::equal(expectedResultShape, resultType.getShape()))
+    return false;
+
+  int64_t tupleCount = indicesType.getNumElements() / indexDepth;
+  if (tupleCount != dataType.getNumElements())
+    return false;
+
+  int64_t prefixRank = indicesRank - 1;
+  SmallVector<int64_t> position(prefixRank);
+  for (int64_t tuple = 0; tuple < tupleCount; ++tuple) {
+    int64_t remainder = tuple;
+    for (int64_t dimension = prefixRank - 1; dimension >= 0; --dimension) {
+      position[dimension] = remainder % indicesShape[dimension];
+      remainder /= indicesShape[dimension];
+    }
+
+    int64_t flatOffset = 0;
+    for (int64_t axis = 0; axis < dataRank; ++axis) {
+      int64_t coordinate;
+      if (axis < batchDims) {
+        coordinate = position[axis];
+      } else {
+        coordinate = indexValues[tuple * indexDepth + axis - batchDims];
+        if (coordinate < 0)
+          coordinate += dataShape[axis];
+      }
+      if (coordinate < 0 || coordinate >= dataShape[axis])
+        return false;
+      flatOffset = flatOffset * dataShape[axis] + coordinate;
+    }
+    if (flatOffset != tuple)
+      return false;
+  }
+  return true;
+}
+
 class GatherNDLowering final : public OpConversionPattern<ONNXGatherNDOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -24,6 +95,40 @@ public:
     auto sourceIndicesType =
         dyn_cast<RankedTensorType>(op.getIndices().getType());
     auto sourceResultType = dyn_cast<RankedTensorType>(op.getType());
+    if (sourceDataType && sourceIndicesType && sourceResultType) {
+      FailureOr<SmallVector<int64_t>> constantIndices =
+          getConstantIntValues(op.getIndices());
+      if (succeeded(constantIndices) &&
+          isRowMajorReshapeGather(sourceDataType, sourceIndicesType,
+              sourceResultType, op.getBatchDims(), *constantIndices)) {
+        if (data.getType() != sourceDataType) {
+          Value permutation =
+              createI32ShapeConstant(rewriter, op.getLoc(), {0, 3, 1, 2});
+          data = createTFLOperation(rewriter, op.getLoc(), "tfl.transpose",
+              TypeRange{sourceDataType}, ValueRange{data, permutation})
+                     ->getResult(0);
+        }
+        Value resultShape = createI32ShapeConstant(
+            rewriter, op.getLoc(), sourceResultType.getShape());
+        Value reshaped =
+            createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+                TypeRange{sourceResultType}, ValueRange{data, resultShape})
+                ->getResult(0);
+        Type physicalResultType = convertRank4NCHWToNHWCType(sourceResultType);
+        if (physicalResultType == sourceResultType) {
+          rewriter.replaceOp(op, reshaped);
+          return success();
+        }
+
+        Value permutation =
+            createI32ShapeConstant(rewriter, op.getLoc(), {0, 2, 3, 1});
+        Operation *physicalResult = createTFLOperation(rewriter, op.getLoc(),
+            "tfl.transpose", TypeRange{physicalResultType},
+            ValueRange{reshaped, permutation});
+        rewriter.replaceOp(op, physicalResult->getResults());
+        return success();
+      }
+    }
     if (!sourceDataType || !sourceIndicesType || !sourceResultType ||
         failed(validateStaticF32Tensor(op, data.getType(), "GatherND data")) ||
         failed(
@@ -205,7 +310,7 @@ public:
         for (int64_t tuple = 0; tuple < tupleCount; ++tuple) {
           int64_t remainder = tuple;
           for (int64_t dimension = prefixRank - 1; dimension >= 0;
-               --dimension) {
+              --dimension) {
             position[dimension] = remainder % indicesShape[dimension];
             remainder /= indicesShape[dimension];
           }
