@@ -310,7 +310,7 @@ public:
         for (int64_t tuple = 0; tuple < tupleCount; ++tuple) {
           int64_t remainder = tuple;
           for (int64_t dimension = prefixRank - 1; dimension >= 0;
-              --dimension) {
+               --dimension) {
             position[dimension] = remainder % indicesShape[dimension];
             remainder /= indicesShape[dimension];
           }
