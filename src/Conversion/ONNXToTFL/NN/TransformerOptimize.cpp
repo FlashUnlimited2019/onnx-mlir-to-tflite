@@ -418,7 +418,7 @@ FailureOr<DenseElementsAttr> transposeBroadcastConstant(DenseElementsAttr input,
     inputValues.push_back(value.convertToFloat());
   SmallVector<float> sourceValues(sourceType.getNumElements());
   for (int64_t sourceIndex = 0; sourceIndex < sourceType.getNumElements();
-      ++sourceIndex) {
+       ++sourceIndex) {
     int64_t remaining = sourceIndex;
     SmallVector<int64_t> sourceCoordinate(rank);
     for (int64_t axis = 0; axis < rank; ++axis) {
@@ -798,7 +798,8 @@ public:
       firstTranspose = candidate;
       constant = add->getOperand(1);
     } else if (Operation *candidate = add->getOperand(1).getDefiningOp();
-        candidate && candidate->getName().getStringRef() == "tfl.transpose") {
+               candidate &&
+               candidate->getName().getStringRef() == "tfl.transpose") {
       firstTranspose = candidate;
       constant = add->getOperand(0);
     }

@@ -64,7 +64,7 @@ FailureOr<Value> createBatchMatMul(Operation *sourceOp, Value lhs, Value rhs,
   int64_t flattenedBatch = 1;
   if (collapseBatchDimensions) {
     for (int64_t dimension = 0; dimension < lhsType.getRank() - 2;
-        ++dimension) {
+         ++dimension) {
       int64_t extent = lhsType.getShape()[dimension];
       if (extent <= 0 || extent != rhsType.getShape()[dimension] ||
           extent != resultType.getShape()[dimension] ||
