@@ -55,6 +55,29 @@ public:
       seen[axis] = true;
     }
 
+    SmallVector<int64_t> inputLayout =
+        getONNXToTFLPhysicalToLogicalLayout(inputType);
+    SmallVector<int64_t> resultLayout =
+        getONNXToTFLPhysicalToLogicalLayout(resultType);
+    SmallVector<int64_t> inverseInput(rank);
+    for (int64_t physicalAxis = 0; physicalAxis < rank; ++physicalAxis)
+      inverseInput[inputLayout[physicalAxis]] = physicalAxis;
+    SmallVector<int64_t> physicalPermutation(rank);
+    for (int64_t physicalAxis = 0; physicalAxis < rank; ++physicalAxis) {
+      int64_t logicalOutputAxis = resultLayout[physicalAxis];
+      physicalPermutation[physicalAxis] =
+          inverseInput[permutation[logicalOutputAxis]];
+    }
+    bool physicalIdentity = true;
+    for (int64_t axis = 0; axis < rank; ++axis)
+      physicalIdentity &= physicalPermutation[axis] == axis;
+    Type convertedResultType =
+        this->getTypeConverter()->convertType(op->getResult(0).getType());
+    if (physicalIdentity && data.getType() == convertedResultType) {
+      rewriter.replaceOp(op, data);
+      return success();
+    }
+
     // TFLite backends commonly cap Transpose at rank 5. High-rank attention
     // layouts often carry inert singleton axes; remove enough of them before
     // the real permutation and restore the logical result with a Reshape.
@@ -115,25 +138,12 @@ public:
       return success();
     }
 
-    // Both the input and output of an ONNX rank-4 Transpose are represented
-    // physically as NHWC. Translate the logical NCHW permutation into the
-    // equivalent permutation between those physical layouts.
-    if (rank == 4 && inputType.getElementType().isF32()) {
-      constexpr int64_t physicalToLogical[] = {0, 2, 3, 1};
-      SmallVector<int64_t> physicalPermutation(4);
-      for (int64_t physicalAxis = 0; physicalAxis < 4; ++physicalAxis) {
-        int64_t logicalOutputAxis = physicalToLogical[physicalAxis];
-        physicalPermutation[physicalAxis] =
-            mapNCHWAxisToNHWC(permutation[logicalOutputAxis]);
-      }
-      permutation = std::move(physicalPermutation);
-    }
+    permutation = std::move(physicalPermutation);
 
     Value perm = createI32ShapeConstant(rewriter, op.getLoc(), permutation);
     Operation *newOp =
         createTFLOperation(rewriter, op.getLoc(), "tfl.transpose",
-            TypeRange{convertRank4NCHWToNHWCType(op->getResult(0).getType())},
-            ValueRange{data, perm});
+            TypeRange{convertedResultType}, ValueRange{data, perm});
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }

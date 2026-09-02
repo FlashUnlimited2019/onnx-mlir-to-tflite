@@ -37,13 +37,13 @@ module {
 // -----
 
 module {
-  func.func @main_graph(%arg0: tensor<1x1x1x1x2x3xf32>, %arg1: tensor<1x1x1x1x3x4xf32>) -> tensor<1x1x1x1x2x4xf32> {
-    %0 = "onnx.MatMul"(%arg0, %arg1) : (tensor<1x1x1x1x2x3xf32>, tensor<1x1x1x1x3x4xf32>) -> tensor<1x1x1x1x2x4xf32>
-    return %0 : tensor<1x1x1x1x2x4xf32>
+  func.func @main_graph(%arg0: tensor<2x1x1x1x2x3xf32>, %arg1: tensor<1x1x1x1x3x4xf32>) -> tensor<2x1x1x1x2x4xf32> {
+    %0 = "onnx.MatMul"(%arg0, %arg1) : (tensor<2x1x1x1x2x3xf32>, tensor<1x1x1x1x3x4xf32>) -> tensor<2x1x1x1x2x4xf32>
+    return %0 : tensor<2x1x1x1x2x4xf32>
   }
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
-// CHECK: ONNXToTFL MatMul/Gemm supports operand ranks 2 through 5
+// CHECK: ONNXToTFL MatMul/Gemm with operand rank > 5 requires identical static batch dimensions
 
 // -----
 

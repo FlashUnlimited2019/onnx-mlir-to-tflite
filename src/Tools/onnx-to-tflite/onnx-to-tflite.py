@@ -93,6 +93,18 @@ def _parse_args() -> argparse.Namespace:
         "--verify-each", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
+        "--layout-mode",
+        choices=("legacy", "experimental"),
+        default="legacy",
+        help="select the ONNX-to-TFL per-value layout strategy",
+    )
+    parser.add_argument(
+        "--layout-diagnostics",
+        choices=("none", "summary", "values"),
+        default="none",
+        help="print per-value layout analysis diagnostics",
+    )
+    parser.add_argument(
         "--use-buffer-offset",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -207,7 +219,11 @@ def main() -> int:
             str(onnx_mlir_opt),
             str(onnx_mlir_path),
             "--shape-inference",
-            "--convert-onnx-to-tfl",
+            (
+                "--convert-onnx-to-tfl="
+                f"layout-mode={args.layout_mode} "
+                f"layout-diagnostics={args.layout_diagnostics}"
+            ),
             "--canonicalize",
             "-o",
             str(conversion_output),

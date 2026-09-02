@@ -7,6 +7,7 @@
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
 #include <limits>
+#include <numeric>
 
 using namespace mlir;
 
@@ -85,6 +86,10 @@ public:
       }
     }
 
+    Type convertedResultType =
+        this->getTypeConverter()->convertType(op.getType());
+    if (adaptor.getUpdates().getType() != convertedResultType)
+      return failure();
     rewriter.replaceOp(op, adaptor.getUpdates());
     return success();
   }
@@ -140,6 +145,36 @@ public:
     if (axis < 0 || axis >= rank)
       return op.emitError() << "invalid ScatterElements axis " << op.getAxis(),
              failure();
+
+    bool hasPerValueLayout =
+        dataType.getEncoding() || indicesType.getEncoding() ||
+        updatesType.getEncoding() || resultType.getEncoding();
+    SmallVector<int64_t> identityLayout(rank);
+    std::iota(identityLayout.begin(), identityLayout.end(), 0);
+    auto logicalDataType = stripONNXToTFLLayoutEncoding(dataType);
+    auto logicalIndicesType = stripONNXToTFLLayoutEncoding(indicesType);
+    auto logicalUpdatesType = stripONNXToTFLLayoutEncoding(updatesType);
+    auto logicalResultType = stripONNXToTFLLayoutEncoding(resultType);
+    Value data = adaptor.getData();
+    Value runtimeIndices = adaptor.getIndices();
+    Value updates = adaptor.getUpdates();
+    if (hasPerValueLayout) {
+      FailureOr<Value> logicalData =
+          convertTFLValueLayout(rewriter, op.getLoc(), data, logicalDataType,
+              getONNXToTFLPhysicalToLogicalLayout(dataType), identityLayout);
+      FailureOr<Value> logicalIndices = convertTFLValueLayout(rewriter,
+          op.getLoc(), runtimeIndices, logicalIndicesType,
+          getONNXToTFLPhysicalToLogicalLayout(indicesType), identityLayout);
+      FailureOr<Value> logicalUpdates = convertTFLValueLayout(rewriter,
+          op.getLoc(), updates, logicalUpdatesType,
+          getONNXToTFLPhysicalToLogicalLayout(updatesType), identityLayout);
+      if (failed(logicalData) || failed(logicalIndices) ||
+          failed(logicalUpdates))
+        return failure();
+      data = *logicalData;
+      runtimeIndices = *logicalIndices;
+      updates = *logicalUpdates;
+    }
     ArrayRef<int64_t> dataShape = dataType.getShape();
     ArrayRef<int64_t> indicesShape = indicesType.getShape();
     for (int64_t dimension = 0; dimension < rank; ++dimension) {
@@ -158,7 +193,6 @@ public:
     Location loc = op.getLoc();
     auto i32IndicesType =
         RankedTensorType::get(indicesShape, rewriter.getI32Type());
-    Value runtimeIndices = adaptor.getIndices();
     if (indicesType.getElementType().isSignlessInteger(64))
       runtimeIndices = createTFLOperation(rewriter, loc, "tfl.cast",
           TypeRange{i32IndicesType}, ValueRange{runtimeIndices})
@@ -254,25 +288,39 @@ public:
           TypeRange{sourceType}, ValueRange{value, permutation})
           ->getResult(0);
     };
-    Value data = restoreLogicalRank4(adaptor.getData(), dataType);
-    Value updates = restoreLogicalRank4(adaptor.getUpdates(), updatesType);
+    if (!hasPerValueLayout) {
+      data = restoreLogicalRank4(data, dataType);
+      updates = restoreLogicalRank4(updates, updatesType);
+    }
     Value deltas = updates;
+    RankedTensorType calculationUpdatesType =
+        hasPerValueLayout ? logicalUpdatesType : updatesType;
     if (!additiveReduction) {
       Value oldValues = createTFLOperation(rewriter, loc, "tfl.gather_nd",
-          TypeRange{updatesType}, ValueRange{data, coordinates})
+          TypeRange{calculationUpdatesType}, ValueRange{data, coordinates})
                             ->getResult(0);
       deltas = createTFLOperation(rewriter, loc, "tfl.sub",
-          TypeRange{updatesType}, ValueRange{updates, oldValues}, fusedNone)
+          TypeRange{calculationUpdatesType}, ValueRange{updates, oldValues},
+          fusedNone)
                    ->getResult(0);
     }
     Value shape = createI32ShapeConstant(rewriter, loc, dataShape);
     Value sparseDeltas = createTFLOperation(rewriter, loc, "tfl.scatter_nd",
-        TypeRange{dataType}, ValueRange{coordinates, deltas, shape})
+        TypeRange{hasPerValueLayout ? logicalDataType : dataType},
+        ValueRange{coordinates, deltas, shape})
                              ->getResult(0);
     Value result = createTFLOperation(rewriter, loc, "tfl.add",
-        TypeRange{resultType}, ValueRange{data, sparseDeltas}, fusedNone)
+        TypeRange{hasPerValueLayout ? logicalResultType : resultType},
+        ValueRange{data, sparseDeltas}, fusedNone)
                        ->getResult(0);
-    if (rank == 4) {
+    if (hasPerValueLayout) {
+      FailureOr<Value> physicalResult =
+          convertTFLValueLayout(rewriter, loc, result, logicalResultType,
+              identityLayout, getONNXToTFLPhysicalToLogicalLayout(resultType));
+      if (failed(physicalResult))
+        return failure();
+      result = *physicalResult;
+    } else if (rank == 4) {
       Type physicalResultType = convertRank4NCHWToNHWCType(resultType);
       Value permutation = createI32ShapeConstant(rewriter, loc, {0, 2, 3, 1});
       result = createTFLOperation(rewriter, loc, "tfl.transpose",

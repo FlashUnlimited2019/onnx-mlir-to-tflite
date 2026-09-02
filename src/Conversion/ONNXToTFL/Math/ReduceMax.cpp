@@ -54,8 +54,18 @@ public:
     if (auto attr = op->getAttrOfType<IntegerAttr>("keepdims"))
       keepDims = attr.getValue().getSExtValue() != 0;
 
-    // Reduction axes are logical ONNX axes. Restore NCHW order while reducing
-    // rank-4 values, then convert a rank-4 result back to physical NHWC.
+    if (sourceInputType.getEncoding() || sourceResultType.getEncoding()) {
+      FailureOr<Value> result =
+          createTFLLayoutAwareReduction(rewriter, op.getLoc(), "tfl.reduce_max",
+              input, sourceInputType, sourceResultType, axes, keepDims);
+      if (failed(result))
+        return failure();
+      rewriter.replaceOp(op, *result);
+      return success();
+    }
+
+    // Preserve the legacy rank-4 lowering unless per-value layout information
+    // explicitly opts this value into the experimental path.
     if (rank == 4 && sourceInputType.getElementType().isF32()) {
       Value permutation =
           createI32ShapeConstant(rewriter, op.getLoc(), {0, 3, 1, 2});

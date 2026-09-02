@@ -71,16 +71,26 @@ def parse_integer_input_ranges(specifications: list[str]) -> dict[str, tuple[int
     return ranges
 
 
-def onnx_to_tfl_input(value: np.ndarray) -> np.ndarray:
-    """Rank-4 FP32 activations are NHWC; other supported types stay logical."""
+def onnx_to_tfl_input(value: np.ndarray, expected_shape: tuple[int, ...]) -> np.ndarray:
+    """Adapt a rank-4 boundary only when the TFLite shape requires NHWC."""
+    if value.shape == expected_shape:
+        return value
     if value.ndim == 4 and value.dtype == np.float32:
-        return np.transpose(value, (0, 2, 3, 1))
+        transposed = np.transpose(value, (0, 2, 3, 1))
+        if transposed.shape == expected_shape:
+            return transposed
     return value
 
 
-def tfl_to_onnx_output(value: np.ndarray) -> np.ndarray:
+def tfl_to_onnx_output(
+    value: np.ndarray, expected_shape: tuple[int, ...]
+) -> np.ndarray:
+    if value.shape == expected_shape:
+        return value
     if value.ndim == 4 and value.dtype == np.float32:
-        return np.transpose(value, (0, 3, 1, 2))
+        transposed = np.transpose(value, (0, 3, 1, 2))
+        if transposed.shape == expected_shape:
+            return transposed
     return value
 
 
@@ -222,8 +232,8 @@ def main() -> int:
     )
     for ort_metadata, tfl_metadata in zip(input_metadata, tfl_inputs):
         onnx_value = ort_inputs[ort_metadata.name]
-        tfl_value = onnx_to_tfl_input(onnx_value)
         expected_shape = tuple(int(dim) for dim in tfl_metadata["shape"])
+        tfl_value = onnx_to_tfl_input(onnx_value, expected_shape)
         if tfl_value.shape != expected_shape:
             raise AssertionError(
                 f"input shape differs for {ort_metadata.name}: "
@@ -242,15 +252,19 @@ def main() -> int:
         )
 
     interpreter.invoke()
-    tfl_outputs = [
-        tfl_to_onnx_output(interpreter.get_tensor(metadata["index"]))
-        for metadata in interpreter.get_output_details()
-    ]
-    if len(ort_outputs) != len(tfl_outputs):
+    tfl_output_details = interpreter.get_output_details()
+    if len(ort_outputs) != len(tfl_output_details):
         raise AssertionError(
             f"output count differs: ONNX={len(ort_outputs)}, "
-            f"TFLite={len(tfl_outputs)}"
+            f"TFLite={len(tfl_output_details)}"
         )
+    tfl_outputs = [
+        tfl_to_onnx_output(
+            interpreter.get_tensor(tfl_metadata["index"]),
+            tuple(int(dim) for dim in ort_metadata.shape),
+        )
+        for ort_metadata, tfl_metadata in zip(output_metadata, tfl_output_details)
+    ]
 
     failed = False
     for metadata, expected, actual in zip(output_metadata, ort_outputs, tfl_outputs):

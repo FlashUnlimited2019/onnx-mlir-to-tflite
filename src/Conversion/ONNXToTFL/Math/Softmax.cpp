@@ -22,6 +22,7 @@ public:
             validateStaticF32Tensor(op, op->getResult(0).getType(), "result")))
       return failure();
     auto inputType = cast<RankedTensorType>(input.getType());
+    auto sourceInputType = cast<RankedTensorType>(op->getOperand(0).getType());
     int64_t rank = inputType.getRank();
     int64_t axis = -1;
     if (auto attr = op->getAttrOfType<IntegerAttr>("axis"))
@@ -32,12 +33,15 @@ public:
                      << rank;
       return failure();
     }
-    if (rank == 4)
-      axis = mapNCHWAxisToNHWC(axis);
+    axis = mapONNXToTFLLogicalAxis(sourceInputType, axis);
+    if (axis < 0)
+      return op.emitError("Softmax input has an invalid layout encoding"),
+             failure();
 
     SmallVector<NamedAttribute> attributes{
         rewriter.getNamedAttr("beta", rewriter.getF32FloatAttr(1.0f))};
-    Type resultType = convertRank4NCHWToNHWCType(op->getResult(0).getType());
+    Type resultType =
+        this->getTypeConverter()->convertType(op->getResult(0).getType());
     if (axis == rank - 1) {
       Operation *newOp = createTFLOperation(rewriter, op.getLoc(),
           "tfl.softmax", TypeRange{resultType}, ValueRange{input}, attributes);

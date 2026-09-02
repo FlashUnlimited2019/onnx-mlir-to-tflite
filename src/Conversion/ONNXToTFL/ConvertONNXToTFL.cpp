@@ -6,6 +6,7 @@
 
 //===----- ConvertONNXToTFL.cpp - ONNX to TensorFlow Lite lowering -------===//
 
+#include "src/Conversion/ONNXToTFL/LayoutAnalysis.hpp"
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
 #include "mlir/IR/Verifier.h"
@@ -182,9 +183,9 @@ LogicalResult finalizeEntryPointTypes(ModuleOp module) {
   inputs.reserve(oldType.getNumInputs());
   results.reserve(oldType.getNumResults());
   for (Type type : oldType.getInputs())
-    inputs.push_back(convertRank4NCHWToNHWCType(type));
+    inputs.push_back(convertONNXToTFLPhysicalType(type));
   for (Type type : oldType.getResults())
-    results.push_back(convertRank4NCHWToNHWCType(type));
+    results.push_back(convertONNXToTFLPhysicalType(type));
 
   // The conversion driver represents a converted entry argument with an
   // unrealized cast because the surrounding function is deliberately kept
@@ -221,8 +222,8 @@ LogicalResult finalizeEntryPointTypes(ModuleOp module) {
     Type inputType = input.getType();
     Type outputType = output.getType();
     if (inputType != outputType &&
-        inputType != convertRank4NCHWToNHWCType(outputType) &&
-        outputType != convertRank4NCHWToNHWCType(inputType)) {
+        inputType != convertONNXToTFLPhysicalType(outputType) &&
+        outputType != convertONNXToTFLPhysicalType(inputType)) {
       remaining.push_back(cast);
       return;
     }
@@ -242,6 +243,13 @@ class ConvertONNXToTFLPass final
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertONNXToTFLPass)
 
+  ConvertONNXToTFLPass() = default;
+  ConvertONNXToTFLPass(const ConvertONNXToTFLPass &pass)
+      : PassWrapper<ConvertONNXToTFLPass, OperationPass<ModuleOp>>() {
+    layoutDiagnostics = pass.layoutDiagnostics.getValue();
+    layoutMode = pass.layoutMode.getValue();
+  }
+
   StringRef getArgument() const final { return "convert-onnx-to-tfl"; }
   StringRef getDescription() const final {
     return "Lower the ONNXToTFL MVP operator set to TFL dialect MLIR";
@@ -251,12 +259,20 @@ public:
         func::FuncDialect>();
   }
 
+  Option<std::string> layoutDiagnostics{*this, "layout-diagnostics",
+      llvm::cl::desc(
+          "Emit read-only per-value layout analysis: none, summary, values"),
+      llvm::cl::init("none")};
+  Option<std::string> layoutMode{*this, "layout-mode",
+      llvm::cl::desc("Select per-value layout lowering: legacy, experimental"),
+      llvm::cl::init("legacy")};
+
   void runOnOperation() final {
     ModuleOp module = getOperation();
     TypeConverter typeConverter;
     typeConverter.addConversion([](Type type) { return type; });
     typeConverter.addConversion([](RankedTensorType type) -> Type {
-      return convertRank4NCHWToNHWCType(type);
+      return convertONNXToTFLPhysicalType(type);
     });
 
     if (failed(prepareEntryPoint(module))) {
@@ -266,11 +282,38 @@ public:
 
     RewritePatternSet preprocessingPatterns(&getContext());
     populateONNXToTFLPreprocessingPatterns(preprocessingPatterns);
+    populateONNXToTFLStaticUpdatePreprocessingPatterns(preprocessingPatterns);
+    populateONNXToTFLTransformerPreprocessingPatterns(preprocessingPatterns);
     if (failed(
             applyPatternsGreedily(module, std::move(preprocessingPatterns)))) {
       module.emitError("ONNXToTFL preprocessing failed");
       signalPassFailure();
       return;
+    }
+
+    if (layoutDiagnostics != "none" && layoutDiagnostics != "summary" &&
+        layoutDiagnostics != "values") {
+      module.emitError() << "invalid layout-diagnostics mode: "
+                         << layoutDiagnostics
+                         << " (expected none, summary, or values)";
+      signalPassFailure();
+      return;
+    }
+    if (layoutMode != "legacy" && layoutMode != "experimental") {
+      module.emitError() << "invalid layout-mode: " << layoutMode
+                         << " (expected legacy or experimental)";
+      signalPassFailure();
+      return;
+    }
+    ONNXToTFLLayoutAnalysis layoutAnalysis(module);
+    if (layoutDiagnostics != "none")
+      layoutAnalysis.printDiagnostics(
+          llvm::errs(), layoutDiagnostics == "values");
+    if (layoutMode == "experimental") {
+      int64_t encodedValues = layoutAnalysis.applySupportedTypeEncodings();
+      if (layoutDiagnostics != "none")
+        llvm::errs() << "[onnx-to-tfl-layout] encoded-values=" << encodedValues
+                     << '\n';
     }
 
     bool hasUnsupportedOperation = false;
@@ -358,6 +401,27 @@ public:
     config.buildMaterializations = false;
     if (failed(applyPartialConversion(module, target,
             FrozenRewritePatternSet(std::move(patterns)), config))) {
+      signalPassFailure();
+      return;
+    }
+    RewritePatternSet postLoweringPatterns(context);
+    populateTFLMatMulPostLoweringPatterns(postLoweringPatterns);
+    populateTFLTransformerPostLoweringPatterns(postLoweringPatterns);
+    SmallVector<Operation *> postLoweringRoots;
+    module.walk([&](Operation *op) {
+      StringRef name = op->getName().getStringRef();
+      if (name == "tfl.batch_matmul" || name == "tfl.transpose")
+        postLoweringRoots.push_back(op);
+    });
+    GreedyRewriteConfig postLoweringConfig;
+    postLoweringConfig.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps)
+        .setRegionSimplificationLevel(GreedySimplifyRegionLevel::Disabled)
+        .enableFolding(false)
+        .enableConstantCSE(false);
+    if (failed(applyOpPatternsGreedily(postLoweringRoots,
+            FrozenRewritePatternSet(std::move(postLoweringPatterns)),
+            postLoweringConfig))) {
+      module.emitError("ONNXToTFL post-lowering optimization failed");
       signalPassFailure();
       return;
     }

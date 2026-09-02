@@ -34,7 +34,6 @@ public:
                           "boolean data/result tensors"),
              failure();
 
-    bool isF32 = sourceType.getElementType().isF32();
     int64_t rank = sourceType.getRank();
     FailureOr<SmallVector<int64_t>> starts =
         getConstantIntValues(op.getStarts());
@@ -183,11 +182,19 @@ public:
                  ->getResult(0);
     }
 
-    if (isF32 && rank == 4) {
-      SmallVector<int64_t> physicalBegin(4), physicalEnd(4), physicalSize(4),
-          physicalStride(4);
-      for (int64_t logicalAxis = 0; logicalAxis < 4; ++logicalAxis) {
-        int64_t physicalAxis = mapNCHWAxisToNHWC(logicalAxis);
+    // Slice parameters use logical ONNX axes, while the converted value may
+    // use any inferred physical layout. Reorder every rank, not only the
+    // legacy rank-4 NHWC case: experimental layout propagation can carry a
+    // permutation through rank-3 and rank-5 attention tensors as well.
+    if (collapsedAxes.empty()) {
+      SmallVector<int64_t> physicalToLogical =
+          getONNXToTFLPhysicalToLogicalLayout(sourceType);
+      SmallVector<int64_t> physicalBegin(rank), physicalEnd(rank),
+          physicalSize(rank), physicalStride(rank);
+      SmallVector<int64_t> logicalToPhysical(rank);
+      for (int64_t physicalAxis = 0; physicalAxis < rank; ++physicalAxis) {
+        int64_t logicalAxis = physicalToLogical[physicalAxis];
+        logicalToPhysical[logicalAxis] = physicalAxis;
         physicalBegin[physicalAxis] = begin[logicalAxis];
         physicalEnd[physicalAxis] = end[logicalAxis];
         physicalSize[physicalAxis] = size[logicalAxis];
@@ -198,10 +205,10 @@ public:
       size = std::move(physicalSize);
       stride = std::move(physicalStride);
       for (int64_t &axis : reverseAxes)
-        axis = mapNCHWAxisToNHWC(axis);
+        axis = logicalToPhysical[axis];
     }
     auto finalResultType = cast<RankedTensorType>(
-        convertRank4NCHWToNHWCType(op->getResult(0).getType()));
+        convertONNXToTFLPhysicalType(op->getResult(0).getType()));
     auto resultType = finalResultType;
     if (!collapsedAxes.empty()) {
       SmallVector<int64_t> compactResultShape(

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <numeric>
 
 using namespace mlir;
 
@@ -86,10 +87,26 @@ public:
       return failure();
     }
 
-    auto physicalInputType =
-        dyn_cast<RankedTensorType>(adaptor.getX().getType());
+    Value input = adaptor.getX();
+    SmallVector<int64_t> naturalLayout(rank);
+    std::iota(naturalLayout.begin(), naturalLayout.end(), 0);
+    if (rank == 4)
+      naturalLayout = {0, 2, 3, 1};
+    auto logicalInputType = stripONNXToTFLLayoutEncoding(inputType);
+    FailureOr<Value> naturalInput =
+        convertTFLValueLayout(rewriter, op.getLoc(), input, logicalInputType,
+            getONNXToTFLPhysicalToLogicalLayout(inputType), naturalLayout);
+    if (failed(naturalInput))
+      return failure();
+    input = *naturalInput;
+    auto physicalInputType = dyn_cast<RankedTensorType>(input.getType());
+    auto logicalResultType = stripONNXToTFLLayoutEncoding(resultType);
+    auto naturalEncoding =
+        DenseI64ArrayAttr::get(rewriter.getContext(), naturalLayout);
+    auto naturalResultType = RankedTensorType::get(logicalResultType.getShape(),
+        logicalResultType.getElementType(), naturalEncoding);
     auto physicalResultType =
-        cast<RankedTensorType>(convertRank4NCHWToNHWCType(resultType));
+        cast<RankedTensorType>(convertONNXToTFLPhysicalType(naturalResultType));
     if (!physicalInputType || physicalInputType.getRank() != rank ||
         inputType.getShape()[0] != resultType.getShape()[0] ||
         inputType.getShape()[1] != resultType.getShape()[1]) {
@@ -122,7 +139,7 @@ public:
     }
     bool native2D = nativeUnpadded2D || nativeIncludePad2D;
     if (native2D) {
-      Value poolInput = adaptor.getX();
+      Value poolInput = input;
       if (nativeIncludePad2D && !noExplicitPads) {
         ArrayRef<int64_t> shape = physicalInputType.getShape();
         auto paddedType =
@@ -155,7 +172,12 @@ public:
       Operation *pool =
           createTFLOperation(rewriter, op.getLoc(), "tfl.average_pool_2d",
               TypeRange{physicalResultType}, ValueRange{poolInput}, attributes);
-      rewriter.replaceOp(op, pool->getResults());
+      FailureOr<Value> result = convertTFLValueLayout(rewriter, op.getLoc(),
+          pool->getResult(0), logicalResultType, naturalLayout,
+          getONNXToTFLPhysicalToLogicalLayout(resultType));
+      if (failed(result))
+        return failure();
+      rewriter.replaceOp(op, *result);
       return success();
     }
 
@@ -234,10 +256,9 @@ public:
       auto sliceType = RankedTensorType::get(size, rewriter.getF32Type());
       Value beginValue = createI32ShapeConstant(rewriter, loc, begin);
       Value sizeValue = createI32ShapeConstant(rewriter, loc, size);
-      Value slice =
-          createTFLOperation(rewriter, loc, "tfl.slice", TypeRange{sliceType},
-              ValueRange{adaptor.getX(), beginValue, sizeValue})
-              ->getResult(0);
+      Value slice = createTFLOperation(rewriter, loc, "tfl.slice",
+          TypeRange{sliceType}, ValueRange{input, beginValue, sizeValue})
+                        ->getResult(0);
       auto cellType = RankedTensorType::get(cellShape, rewriter.getF32Type());
       Value mean =
           createTFLOperation(rewriter, loc, "tfl.mean", TypeRange{cellType},
@@ -291,7 +312,12 @@ public:
       op.emitError("failed to assemble static AveragePool output shape");
       return failure();
     }
-    rewriter.replaceOp(op, pieces.front());
+    FailureOr<Value> result = convertTFLValueLayout(rewriter, op.getLoc(),
+        pieces.front(), logicalResultType, naturalLayout,
+        getONNXToTFLPhysicalToLogicalLayout(resultType));
+    if (failed(result))
+      return failure();
+    rewriter.replaceOp(op, *result);
     return success();
   }
 };

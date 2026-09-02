@@ -1159,6 +1159,14 @@ public:
       autoPad = attr.getValue();
     StringRef padding;
     Value input = adaptor.getOperands()[0];
+    SmallVector<int64_t> channelsLastLayout{0, 2, 3, 1};
+    auto logicalInputType = stripONNXToTFLLayoutEncoding(inputType);
+    FailureOr<Value> channelsLastInput =
+        convertTFLValueLayout(rewriter, op.getLoc(), input, logicalInputType,
+            getONNXToTFLPhysicalToLogicalLayout(inputType), channelsLastLayout);
+    if (failed(channelsLastInput))
+      return failure();
+    input = *channelsLastInput;
     if (autoPad == "VALID")
       padding = "VALID";
     else if (autoPad == "SAME_UPPER")
@@ -1215,7 +1223,14 @@ public:
       }
     }
 
-    Type convertedResultType = convertRank4NCHWToNHWCType(resultType);
+    auto logicalResultType = stripONNXToTFLLayoutEncoding(resultType);
+    auto channelsLastEncoding =
+        DenseI64ArrayAttr::get(rewriter.getContext(), channelsLastLayout);
+    auto channelsLastResultType =
+        RankedTensorType::get(logicalResultType.getShape(),
+            logicalResultType.getElementType(), channelsLastEncoding);
+    Type convertedResultType =
+        convertONNXToTFLPhysicalType(channelsLastResultType);
     SmallVector<NamedAttribute> attributes{
         rewriter.getNamedAttr(
             "dilation_h_factor", rewriter.getI32IntegerAttr(dilations[0])),
@@ -1248,19 +1263,26 @@ public:
           "depth_multiplier", rewriter.getI32IntegerAttr(depthMultiplier)));
       tflOpName = "tfl.depthwise_conv_2d";
     }
+    Value result;
     if (isGrouped) {
       FailureOr<Value> grouped = createGroupedConv2D(op, input, filter, bias,
           cast<RankedTensorType>(convertedResultType), group, attributes,
           rewriter);
       if (failed(grouped))
         return failure();
-      rewriter.replaceOp(op, *grouped);
+      result = *grouped;
     } else {
       SmallVector<Value> operands{input, filter, bias};
       Operation *newOp = createTFLOperation(rewriter, op.getLoc(), tflOpName,
           TypeRange{convertedResultType}, operands, attributes);
-      rewriter.replaceOp(op, newOp->getResults());
+      result = newOp->getResult(0);
     }
+    FailureOr<Value> physicalResult = convertTFLValueLayout(rewriter,
+        op.getLoc(), result, logicalResultType, channelsLastLayout,
+        getONNXToTFLPhysicalToLogicalLayout(resultType));
+    if (failed(physicalResult))
+      return failure();
+    rewriter.replaceOp(op, *physicalResult);
     return success();
   }
 };

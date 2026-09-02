@@ -39,6 +39,10 @@ public:
 };
 
 void populateONNXToTFLPreprocessingPatterns(mlir::RewritePatternSet &);
+void populateONNXToTFLStaticUpdatePreprocessingPatterns(
+    mlir::RewritePatternSet &);
+void populateONNXToTFLTransformerPreprocessingPatterns(
+    mlir::RewritePatternSet &);
 
 void populateLoweringONNXElementwiseOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);
@@ -56,6 +60,8 @@ void populateLoweringONNXLegacyMathOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);
 void populateLoweringONNXMatMulGemmOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);
+void populateTFLMatMulPostLoweringPatterns(mlir::RewritePatternSet &);
+void populateTFLTransformerPostLoweringPatterns(mlir::RewritePatternSet &);
 void populateLoweringONNXSoftmaxOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);
 void populateLoweringONNXTopKOpToTFLPatterns(

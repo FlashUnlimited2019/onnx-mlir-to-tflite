@@ -35,6 +35,17 @@ FailureOr<Value> adaptRank4ElementwiseBroadcast(Operation *sourceOp,
     return failure();
   }
 
+  SmallVector<int64_t> resultLayout =
+      getONNXToTFLPhysicalToLogicalLayout(sourceResultType);
+  if (resultLayout == SmallVector<int64_t>({0, 1, 2, 3}))
+    return convertedOperand;
+  if (resultLayout != SmallVector<int64_t>({0, 2, 3, 1})) {
+    sourceOp->emitError(
+        "lower-rank elementwise broadcast requires identity or channels-last "
+        "result layout");
+    return failure();
+  }
+
   SmallVector<int64_t> logicalShape(4, 1);
   std::copy(sourceOperandType.getShape().begin(),
       sourceOperandType.getShape().end(), logicalShape.end() - operandRank);
@@ -107,7 +118,8 @@ public:
       return failure();
     }
 
-    Type resultType = convertRank4NCHWToNHWCType(op->getResult(0).getType());
+    Type resultType =
+        this->getTypeConverter()->convertType(op->getResult(0).getType());
     SmallVector<Value> operands(adaptor.getOperands());
     bool isPow = tflName == "tfl.pow";
     int64_t maximumBroadcastRank = isPow ? 4 : 5;
@@ -251,7 +263,8 @@ public:
       return op.emitError("ONNXToTFL Min/Max supports FP32, i32, and i64"),
              failure();
 
-    Type convertedResultType = convertRank4NCHWToNHWCType(sourceResultType);
+    Type convertedResultType =
+        this->getTypeConverter()->convertType(sourceResultType);
     SmallVector<Value> operands(adaptor.getOperands());
     for (unsigned i = 0; i < operands.size(); ++i) {
       auto operandType =
@@ -312,7 +325,8 @@ public:
             op, op->getResult(0).getType(), "result")))
       return failure();
 
-    Type resultType = convertRank4NCHWToNHWCType(op->getResult(0).getType());
+    Type resultType =
+        this->getTypeConverter()->convertType(op->getResult(0).getType());
     Operation *newOp = createTFLOperation(rewriter, op.getLoc(), tflName,
         TypeRange{resultType}, adaptor.getOperands());
     rewriter.replaceOp(op, newOp->getResults());
@@ -356,7 +370,8 @@ public:
       return failure();
     }
 
-    Type resultType = convertRank4NCHWToNHWCType(op.getY().getType());
+    Type resultType =
+        this->getTypeConverter()->convertType(op.getY().getType());
     SmallVector<NamedAttribute> attributes{rewriter.getNamedAttr(
         "approximate", rewriter.getBoolAttr(approximate == "tanh"))};
     Operation *gelu = createTFLOperation(rewriter, op.getLoc(), "tfl.gelu",
@@ -377,7 +392,8 @@ public:
         failed(validateStaticF32TensorOrScalar(
             op, op.getY().getType(), "Elu result")))
       return failure();
-    Type resultType = convertRank4NCHWToNHWCType(op.getY().getType());
+    Type resultType =
+        this->getTypeConverter()->convertType(op.getY().getType());
     float alpha = op.getAlpha().convertToFloat();
     if (alpha == 1.0f) {
       Operation *elu = createTFLOperation(rewriter, op.getLoc(), "tfl.elu",
@@ -424,7 +440,8 @@ public:
         failed(validateStaticF32TensorOrScalar(
             op, op.getY().getType(), "Reciprocal result")))
       return failure();
-    Type resultType = convertRank4NCHWToNHWCType(op.getY().getType());
+    Type resultType =
+        this->getTypeConverter()->convertType(op.getY().getType());
     Value one = createF32ScalarTensorConstant(rewriter, op.getLoc(), 1.0f);
     SmallVector<NamedAttribute> attributes{getFusedActivationNone(rewriter)};
     Operation *division = createTFLOperation(rewriter, op.getLoc(), "tfl.div",
@@ -654,7 +671,8 @@ public:
         failed(
             validateStaticF32Tensor(op, op->getResult(0).getType(), "result")))
       return failure();
-    Type resultType = convertRank4NCHWToNHWCType(op->getResult(0).getType());
+    Type resultType =
+        this->getTypeConverter()->convertType(op->getResult(0).getType());
     Operation *hardSwish = createTFLOperation(rewriter, op.getLoc(),
         "tfl.hard_swish", TypeRange{resultType}, ValueRange{input});
     rewriter.replaceOp(op, hardSwish->getResults());
@@ -673,7 +691,8 @@ public:
         failed(
             validateStaticF32Tensor(op, op->getResult(0).getType(), "result")))
       return failure();
-    Type resultType = convertRank4NCHWToNHWCType(op->getResult(0).getType());
+    Type resultType =
+        this->getTypeConverter()->convertType(op->getResult(0).getType());
     float alpha = op.getAlpha().convertToFloat();
     float beta = op.getBeta().convertToFloat();
     Value alphaValue =
@@ -710,7 +729,8 @@ public:
             validateStaticF32Tensor(op, op->getResult(0).getType(), "result")))
       return failure();
 
-    Type resultType = convertRank4NCHWToNHWCType(op->getResult(0).getType());
+    Type resultType =
+        this->getTypeConverter()->convertType(op->getResult(0).getType());
     SmallVector<NamedAttribute> attributes{rewriter.getNamedAttr(
         "alpha", rewriter.getF32FloatAttr(op.getAlpha().convertToFloat()))};
     Operation *leakyRelu = createTFLOperation(rewriter, op.getLoc(),

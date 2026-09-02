@@ -5,6 +5,8 @@
 //===----------- ONNXDecompose.cpp - ONNX High Level Rewriting ------------===//
 //
 // Copyright 2019-2026 The IBM Research Authors.
+
+// Modified by FlashUnlimited2019 in 2026.
 //
 // =============================================================================
 //
@@ -20,7 +22,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <algorithm>
 #include <numeric>
+#include <optional>
 
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -152,8 +156,8 @@ bool hasStaticSpatialDims(Value v) {
 //   %res = onnx.SequenceAt(%seq, %position)
 // We just try to avoid using the sequence related ops, which are less
 // optimized, or even not implemented in onnx-mlir.
-// In the targeted use case, %split and %position are constant scalar and the
-// tensor of %input and %res have static shape.
+// In the targeted use case, %split is a constant scalar or vector, %position
+// is a constant scalar, and the tensors of %input and %res have static shape.
 // This condition greatly reduces the complexity of code generation to replace
 // SequenceAt with split op
 //   %res = onnx.Split(%input, onnx.expand(%split, %input.shape()[%axis]))
@@ -172,6 +176,46 @@ bool hasStaticSpatialDims(Value v) {
 // The split approach may have better performance than the alternative slice
 // approach,  because the slicing is done separately.
 
+std::optional<SmallVector<int64_t>> getSequenceSplitSizes(
+    Value split, int64_t axisSize) {
+  auto constant = split.getDefiningOp<ONNXConstantOp>();
+  if (!constant || axisSize <= 0)
+    return std::nullopt;
+  auto elements = mlir::dyn_cast<ElementsAttr>(constant.getValueAttr());
+  if (!elements || !elements.getElementType().isIntOrIndex() ||
+      elements.getNumElements() == 0)
+    return std::nullopt;
+
+  SmallVector<int64_t> encodedSizes;
+  encodedSizes.reserve(elements.getNumElements());
+  for (IntegerAttr value : elements.getValues<IntegerAttr>())
+    encodedSizes.push_back(value.getInt());
+
+  auto splitType = mlir::dyn_cast<RankedTensorType>(split.getType());
+  if (!splitType)
+    return std::nullopt;
+  if (splitType.getRank() == 0) {
+    int64_t chunkSize = encodedSizes.front();
+    if (chunkSize <= 0)
+      return std::nullopt;
+    SmallVector<int64_t> sizes;
+    for (int64_t remaining = axisSize; remaining > 0;
+         remaining -= std::min(remaining, chunkSize))
+      sizes.push_back(std::min(remaining, chunkSize));
+    return sizes;
+  }
+
+  int64_t total = 0;
+  for (int64_t size : encodedSizes) {
+    if (size <= 0 || size > axisSize - total)
+      return std::nullopt;
+    total += size;
+  }
+  if (total != axisSize)
+    return std::nullopt;
+  return encodedSizes;
+}
+
 bool canSequenceAtBeReplaced(Value sequenceAtResult) {
   if (!hasStaticShape(sequenceAtResult.getType()))
     return false;
@@ -181,7 +225,7 @@ bool canSequenceAtBeReplaced(Value sequenceAtResult) {
   Value inputSequence = op.getInputSequence();
   Value position = op.getPosition();
 
-  if (!isDenseONNXConstant(position))
+  if (!isScalarConstantTensor(position))
     return false;
 
   // Input sequence should be defined with SplitToSequence
@@ -195,7 +239,40 @@ bool canSequenceAtBeReplaced(Value sequenceAtResult) {
   if (!hasStaticShape(input.getType()))
     return false;
   Value split = splitToSequence.getSplit();
-  if (!isScalarConstantTensor(split))
+  if (!isDenseONNXConstant(split))
+    return false;
+
+  ArrayRef<int64_t> shape = getShape(input.getType());
+  int64_t rank = shape.size();
+  int64_t axis = splitToSequence.getAxis();
+  if (axis < 0)
+    axis += rank;
+  if (axis < 0 || axis >= rank)
+    return false;
+
+  auto positionConstant = position.getDefiningOp<ONNXConstantOp>();
+  if (!positionConstant)
+    return false;
+  std::optional<SmallVector<int64_t>> splitSizes =
+      getSequenceSplitSizes(split, shape[axis]);
+  if (!splitSizes)
+    return false;
+
+  int64_t positionValue = getScalarValue<int64_t>(positionConstant);
+  if (positionValue < 0)
+    positionValue += static_cast<int64_t>(splitSizes->size());
+  if (positionValue < 0 ||
+      positionValue >= static_cast<int64_t>(splitSizes->size()))
+    return false;
+
+  SmallVector<int64_t> expectedShape(shape);
+  expectedShape[axis] = (*splitSizes)[positionValue];
+  if (splitToSequence.getKeepdims() == 0) {
+    if (expectedShape[axis] != 1)
+      return false;
+    expectedShape.erase(expectedShape.begin() + axis);
+  }
+  if (!llvm::equal(expectedShape, getShape(sequenceAtResult.getType())))
     return false;
 
   return true;
@@ -233,25 +310,32 @@ Value replaceSequenceAt(
   Value input = splitToSequence.getInput();
   Value split = splitToSequence.getSplit();
 
-  ONNXConstantOp splitConstant =
-      mlir::cast<ONNXConstantOp>(split.getDefiningOp());
-  int64_t splitInt = getScalarValue<int64_t>(splitConstant);
   int64_t axisInt = splitToSequence.getAxis();
 
   ArrayRef<int64_t> shape = getShape(input.getType());
+  if (axisInt < 0)
+    axisInt += shape.size();
+  SmallVector<int64_t> splitSizes =
+      *getSequenceSplitSizes(split, shape[axisInt]);
+  if (positionInt < 0)
+    positionInt += static_cast<int64_t>(splitSizes.size());
 
   OnnxBuilder create(rewriter, loc);
 
-  Type sequenceElementType =
-      mlir::cast<SeqType>(inputSequence.getType()).getElementType();
-  mlir::SmallVector<mlir::Type, 4> outputTypes(
-      shape[axisInt] / splitInt, sequenceElementType);
-  auto numSplit = create.constantInt64(
-      mlir::SmallVector<int64_t, 4>(shape[axisInt] / splitInt, splitInt));
+  auto inputType = mlir::cast<RankedTensorType>(input.getType());
+  SmallVector<Type, 4> outputTypes;
+  outputTypes.reserve(splitSizes.size());
+  for (int64_t splitSize : splitSizes) {
+    SmallVector<int64_t> outputShape(shape);
+    outputShape[axisInt] = splitSize;
+    outputTypes.push_back(RankedTensorType::get(
+        outputShape, inputType.getElementType(), inputType.getEncoding()));
+  }
+  auto numSplit = create.constantInt64(splitSizes);
   auto resultRange = create.split(outputTypes, input, numSplit, axisInt);
   auto rawResult = resultRange[positionInt];
 
-  if (rawResult.getType() == sequenceAtResult.getType())
+  if (splitToSequence.getKeepdims() != 0)
     return rawResult;
 
   // Temporary code for the error in the model generated by torch.onnx.export

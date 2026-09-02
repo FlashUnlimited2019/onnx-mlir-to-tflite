@@ -92,9 +92,19 @@ public:
     if (auto attr = op->template getAttrOfType<IntegerAttr>("keepdims"))
       keepDims = attr.getValue().getSExtValue() != 0;
 
+    if (sourceInputType.getEncoding() || sourceResultType.getEncoding()) {
+      FailureOr<Value> result =
+          createTFLLayoutAwareReduction(rewriter, op.getLoc(), "tfl.mean",
+              input, sourceInputType, sourceResultType, axes, keepDims);
+      if (failed(result))
+        return failure();
+      rewriter.replaceOp(op, *result);
+      return success();
+    }
+
     // Preserve the compact and well-optimized spatial rank-4 path used by
-    // GlobalAveragePool and classification heads. Both the reduction axes and
-    // result dimension order are already correct in physical NHWC here.
+    // global spatial reductions. Both the reduction axes and result dimension
+    // order are already correct in physical NHWC here.
     SmallVector<int64_t> sortedAxes(axes);
     llvm::sort(sortedAxes);
     bool directSpatialRank4 =
@@ -112,9 +122,8 @@ public:
       return success();
     }
 
-    // Every other reduction is expressed in logical ONNX dimension order.
-    // Rank-4 inputs are physically NHWC, so restore NCHW first. Likewise, a
-    // rank-4 result produced from any source rank is transposed back to NHWC.
+    // Every other legacy reduction is expressed in logical ONNX dimension
+    // order. Rank-4 inputs are physically NHWC, so restore NCHW first.
     if (rank == 4) {
       Value permutation =
           createI32ShapeConstant(rewriter, op.getLoc(), {0, 3, 1, 2});

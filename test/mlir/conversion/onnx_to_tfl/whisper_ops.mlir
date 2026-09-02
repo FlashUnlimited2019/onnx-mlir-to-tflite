@@ -35,7 +35,7 @@ module {
 }
 // CHECK-LABEL: func.func @main
 // CHECK: "tfl.batch_matmul"{{.*}} : (tensor<1x2x5x4xf32>, tensor<1x2x4x5xf32>) -> tensor<1x2x5x5xf32>
-// CHECK: "tfl.softmax"{{.*}} : (tensor<1x5x2x5xf32>) -> tensor<1x5x2x5xf32>
+// CHECK: "tfl.softmax"{{.*}} : (tensor<1x2x5x5xf32>) -> tensor<1x2x5x5xf32>
 // CHECK: "tfl.batch_matmul"{{.*}} : (tensor<1x2x5x5xf32>, tensor<1x2x5x4xf32>) -> tensor<1x2x5x4xf32>
 // CHECK-NOT: onnx.
 
@@ -55,6 +55,6 @@ module {
 }
 // CHECK-LABEL: func.func @main
 // CHECK: "tfl.batch_matmul"{{.*}} : (tensor<1x2x3x4xf32>, tensor<1x2x4x5xf32>) -> tensor<1x2x3x5xf32>
-// CHECK: "tfl.softmax"{{.*}} : (tensor<1x3x2x5xf32>) -> tensor<1x3x2x5xf32>
+// CHECK: "tfl.softmax"{{.*}} : (tensor<1x2x3x5xf32>) -> tensor<1x2x3x5xf32>
 // CHECK: "tfl.batch_matmul"{{.*}} : (tensor<1x2x3x5xf32>, tensor<1x2x5x4xf32>) -> tensor<1x2x3x4xf32>
 // CHECK-NOT: onnx.

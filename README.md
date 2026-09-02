@@ -65,8 +65,8 @@ implementation.
 
 - Static, ranked tensor compilation with FP32 as the primary activation type
   and selected integer and boolean tensor support.
-- Layout-aware lowering: rank-4 activations use NHWC in TFLite, while other
-  graph ranks retain their ONNX axis order.
+- Layout-aware lowering: the stable default uses NHWC for rank-4 activations
+  in TFLite, while other graph ranks retain their ONNX axis order.
 - Compile-time conversion of convolution filters and broadcast parameters to
   the layouts expected by TFLite.
 - Direct lowering to builtin TFLite operations without TensorFlow graph
@@ -101,16 +101,9 @@ tar -xzf onnx-mlir-to-tflite-runtime-*.tar.gz \
 cd onnx-to-tflite-runtime
 ```
 
-Convert a static ONNX model with the packaged driver:
-
-```bash
-mkdir -p output tmp
-export TMPDIR="$PWD/tmp"
-
-./bin/onnx-to-tflite \
-  /path/to/model.onnx \
-  -o output/model.tflite
-```
+The packaged driver is located at `./bin/onnx-to-tflite`. See the
+[model conversion guide](docs/convert-model.md) for usage and command-line
+options.
 
 The prebuilt package is intended for Linux x86_64 and requires the glibc and
 libstdc++ ABI versions listed in its `README.md` and `BUILD_INFO.txt`. Ubuntu
@@ -142,59 +135,33 @@ instructions for reusing existing TensorFlow tools.
 
 ## Convert a model
 
-The driver is located at `./bin/onnx-to-tflite` in a prebuilt runtime package
-and at `./build/bin/onnx-to-tflite` in a source build. The examples below use
-the source-build path; replace it with `./bin/onnx-to-tflite` when working
-inside an extracted runtime package.
-
 ```bash
 ./build/bin/onnx-to-tflite \
   /path/to/model.onnx \
   -o /path/to/model.tflite
 ```
 
-The driver automatically locates the other ONNX-MLIR and TensorFlow/LiteRT
-tools in either an extracted runtime package or a bootstrapped source
-workspace. Explicit paths can also be provided:
-
-```bash
-./build/bin/onnx-to-tflite \
-  /path/to/model.onnx \
-  -o /path/to/model.tflite \
-  --onnx-mlir /path/to/onnx-mlir \
-  --onnx-mlir-opt /path/to/onnx-mlir-opt \
-  --litert-opt /path/to/litert-opt \
-  --flatbuffer-translate /path/to/flatbuffer_translate
-```
-
-Useful diagnostic options include:
-
-```text
---no-optimize-tfl          skip the optional TFL optimization stage
---dump-onnx-mlir           preserve the imported ONNX Dialect MLIR
---dump-tfl-mlir            preserve the final TFL Dialect MLIR
---keep-intermediate-files  preserve all intermediate files
---no-verify-each           disable per-pass MLIR verification
---use-buffer-offset        force large-model buffer-offset export
-```
-
-Run `./build/bin/onnx-to-tflite --help` for the complete command-line
-interface.
+See [Convert an ONNX model](docs/convert-model.md) for runtime-package usage,
+layout selection, diagnostics, large-model export, and the complete option
+reference.
 
 ## Layout contract
 
 ONNX commonly represents rank-4 activations as NCHW, while TFLite uses NHWC.
-This project exposes rank-4 TFLite graph inputs and outputs as NHWC and keeps
-convolution and pooling regions in NHWC. It does not insert runtime transposes
-solely to preserve an NCHW external ABI. Callers must therefore adapt rank-4
-boundary tensors when comparing or integrating the generated model.
+The default `legacy` mode exposes rank-4 TFLite graph inputs and outputs as
+NHWC and keeps convolution and pooling regions in NHWC. It does not insert
+runtime transposes solely to preserve an NCHW external ABI. Callers must
+therefore adapt rank-4 boundary tensors when comparing or integrating the
+generated model.
 
 Rank-1, rank-2, rank-3, and rank-5-or-higher graph boundaries retain their
 ONNX axis order. Local layout conversions required by individual operations,
 including Conv3D fallback, are represented explicitly inside the graph.
 
-See the [layout policy](docs/layout.md) for convolution filter layouts,
-broadcast rules, rank-sensitive behavior, and Conv3D reduction details.
+See the [model conversion guide](docs/convert-model.md) for layout-mode
+selection and the [layout policy](docs/layout.md) for convolution filter
+layouts, broadcast rules, rank-sensitive behavior, and Conv3D reduction
+details.
 
 ## Large models
 
@@ -252,7 +219,9 @@ configuration that is not explicitly covered by the
 
 | Document | Description |
 | --- | --- |
+| [Model conversion](docs/convert-model.md) | Driver usage, layout selection, diagnostics, and command-line options |
 | [Build guide](docs/build.md) | Complete LLVM/MLIR, ONNX-MLIR, and TensorFlow/LiteRT build procedure |
+| [Compiler optimizations](docs/compiler-optimizations.md) | ONNX preprocessing, layout propagation, lowering-time rank reduction, and TFL structural rewrites |
 | [Operator support](docs/operator-support.md) | Supported ONNX operations, opsets, types, ranks, attributes, and test coverage |
 | [Architecture](docs/architecture.md) | Cross-version MLIR boundary, conversion design, optimization, and export details |
 | [Layout policy](docs/layout.md) | Rank-sensitive layout contract and convolution lowering rules |

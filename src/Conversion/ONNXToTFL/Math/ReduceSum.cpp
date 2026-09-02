@@ -87,9 +87,18 @@ public:
     if (auto attr = op->template getAttrOfType<IntegerAttr>("keepdims"))
       keepDims = attr.getValue().getSExtValue() != 0;
 
-    // As with MatMul, restore logical NCHW order before a rank-4 reduction.
-    // This also preserves ONNX's output dimension order when keepdims is false
-    // and the result is no longer rank 4.
+    if (sourceInputType.getEncoding() || sourceResultType.getEncoding()) {
+      FailureOr<Value> result =
+          createTFLLayoutAwareReduction(rewriter, op.getLoc(), "tfl.sum", input,
+              sourceInputType, sourceResultType, axes, keepDims);
+      if (failed(result))
+        return failure();
+      rewriter.replaceOp(op, *result);
+      return success();
+    }
+
+    // Preserve the established legacy lowering unless layout analysis has
+    // explicitly attached an encoding to this reduction boundary.
     if (isF32 && rank == 4) {
       Value permutation =
           createI32ShapeConstant(rewriter, op.getLoc(), {0, 3, 1, 2});

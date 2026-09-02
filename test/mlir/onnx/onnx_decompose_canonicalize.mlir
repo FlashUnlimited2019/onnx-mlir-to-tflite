@@ -43,3 +43,18 @@ func.func @sequence_at_multi(%arg0 : tensor<1x1x400xf32>) -> tensor<1x1x100xf32>
 // CHECK:         }
 }
 
+// -----
+
+func.func @sequence_at_negative_axis_and_position(%arg0 : tensor<1x2x6xf32>) -> tensor<1x2x2xf32> {
+  %position = onnx.Constant dense<-1> : tensor<i64>
+  %split = onnx.Constant dense<[2, 2, 2]> : tensor<3xi64>
+  %sequence = "onnx.SplitToSequence"(%arg0, %split) {axis = -1 : si64, keepdims = 1 : si64} : (tensor<1x2x6xf32>, tensor<3xi64>) -> !onnx.Seq<tensor<1x2x2xf32>>
+  %result = "onnx.SequenceAt"(%sequence, %position) : (!onnx.Seq<tensor<1x2x2xf32>>, tensor<i64>) -> tensor<1x2x2xf32>
+  return %result : tensor<1x2x2xf32>
+// CHECK-LABEL:  func.func @sequence_at_negative_axis_and_position
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x2x6xf32>) -> tensor<1x2x2xf32> {
+// CHECK:           [[SPLIT_SIZE_:%.+]] = onnx.Constant dense<2> : tensor<3xi64>
+// CHECK:           [[SPLIT_:%.+]]:3 = "onnx.Split"([[PARAM_0_]], [[SPLIT_SIZE_]]) <{axis = 2 : si64}> : (tensor<1x2x6xf32>, tensor<3xi64>) -> (tensor<1x2x2xf32>, tensor<1x2x2xf32>, tensor<1x2x2xf32>)
+// CHECK:           return [[SPLIT_]]#2 : tensor<1x2x2xf32>
+// CHECK:         }
+}

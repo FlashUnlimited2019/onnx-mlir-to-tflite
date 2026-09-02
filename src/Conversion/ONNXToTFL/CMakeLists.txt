@@ -2,6 +2,7 @@
 
 add_onnx_mlir_library(OMONNXToTFL
   ConvertONNXToTFL.cpp
+  LayoutAnalysis.cpp
   ONNXToTFLLegalizeUtils.cpp
 
   Math/Elementwise.cpp
@@ -30,6 +31,7 @@ add_onnx_mlir_library(OMONNXToTFL
   NN/MaxPool.cpp
   NN/MaxPoolWithIndices.cpp
   NN/StaticSampling.cpp
+  NN/TransformerOptimize.cpp
   Signal/STFT.cpp
   Tensor/Concat.cpp
   Tensor/CompressTrilu.cpp
@@ -46,6 +48,7 @@ add_onnx_mlir_library(OMONNXToTFL
   Tensor/GatherND.cpp
   Tensor/ScatterElements.cpp
   Tensor/ScatterND.cpp
+  Tensor/StaticUpdate.cpp
   Tensor/Sequence.cpp
   Tensor/Pad.cpp
   Tensor/Reshape.cpp

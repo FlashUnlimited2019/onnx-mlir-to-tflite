@@ -7,6 +7,7 @@
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
 #include <limits>
+#include <numeric>
 
 using namespace mlir;
 
@@ -95,12 +96,44 @@ public:
     auto sourceIndicesType =
         dyn_cast<RankedTensorType>(op.getIndices().getType());
     auto sourceResultType = dyn_cast<RankedTensorType>(op.getType());
+    bool hasPerValueLayout =
+        sourceDataType && sourceIndicesType && sourceResultType &&
+        (sourceDataType.getEncoding() || sourceIndicesType.getEncoding() ||
+            sourceResultType.getEncoding());
     if (sourceDataType && sourceIndicesType && sourceResultType) {
       FailureOr<SmallVector<int64_t>> constantIndices =
           getConstantIntValues(op.getIndices());
       if (succeeded(constantIndices) &&
           isRowMajorReshapeGather(sourceDataType, sourceIndicesType,
               sourceResultType, op.getBatchDims(), *constantIndices)) {
+        if (hasPerValueLayout) {
+          auto logicalDataType = stripONNXToTFLLayoutEncoding(sourceDataType);
+          auto logicalResultType =
+              stripONNXToTFLLayoutEncoding(sourceResultType);
+          SmallVector<int64_t> dataIdentity(sourceDataType.getRank());
+          SmallVector<int64_t> resultIdentity(sourceResultType.getRank());
+          std::iota(dataIdentity.begin(), dataIdentity.end(), 0);
+          std::iota(resultIdentity.begin(), resultIdentity.end(), 0);
+          FailureOr<Value> logicalData = convertTFLValueLayout(rewriter,
+              op.getLoc(), data, logicalDataType,
+              getONNXToTFLPhysicalToLogicalLayout(sourceDataType),
+              dataIdentity);
+          if (failed(logicalData))
+            return failure();
+          Value resultShape = createI32ShapeConstant(
+              rewriter, op.getLoc(), logicalResultType.getShape());
+          Value reshaped = createTFLOperation(rewriter, op.getLoc(),
+              "tfl.reshape", TypeRange{logicalResultType},
+              ValueRange{*logicalData, resultShape})
+                               ->getResult(0);
+          FailureOr<Value> physicalResult = convertTFLValueLayout(rewriter,
+              op.getLoc(), reshaped, logicalResultType, resultIdentity,
+              getONNXToTFLPhysicalToLogicalLayout(sourceResultType));
+          if (failed(physicalResult))
+            return failure();
+          rewriter.replaceOp(op, *physicalResult);
+          return success();
+        }
         if (data.getType() != sourceDataType) {
           Value permutation =
               createI32ShapeConstant(rewriter, op.getLoc(), {0, 3, 1, 2});
@@ -151,6 +184,30 @@ public:
       op.emitError("ONNXToTFL GatherND supports ranks 1 through 5 and valid "
                    "nonnegative batch_dims");
       return failure();
+    }
+
+    auto logicalDataType = stripONNXToTFLLayoutEncoding(sourceDataType);
+    auto logicalIndicesType = stripONNXToTFLLayoutEncoding(sourceIndicesType);
+    auto logicalResultType = stripONNXToTFLLayoutEncoding(sourceResultType);
+    SmallVector<int64_t> dataIdentity(dataRank);
+    SmallVector<int64_t> indicesIdentity(indicesRank);
+    SmallVector<int64_t> resultIdentity(resultRank);
+    std::iota(dataIdentity.begin(), dataIdentity.end(), 0);
+    std::iota(indicesIdentity.begin(), indicesIdentity.end(), 0);
+    std::iota(resultIdentity.begin(), resultIdentity.end(), 0);
+    Value runtimeIndicesInput = adaptor.getIndices();
+    if (hasPerValueLayout) {
+      FailureOr<Value> logicalData = convertTFLValueLayout(rewriter,
+          op.getLoc(), data, logicalDataType,
+          getONNXToTFLPhysicalToLogicalLayout(sourceDataType), dataIdentity);
+      FailureOr<Value> logicalIndices = convertTFLValueLayout(rewriter,
+          op.getLoc(), runtimeIndicesInput, logicalIndicesType,
+          getONNXToTFLPhysicalToLogicalLayout(sourceIndicesType),
+          indicesIdentity);
+      if (failed(logicalData) || failed(logicalIndices))
+        return failure();
+      data = *logicalData;
+      runtimeIndicesInput = *logicalIndices;
     }
 
     ArrayRef<int64_t> dataShape = sourceDataType.getShape();
@@ -240,7 +297,7 @@ public:
     } else {
       auto runtimeIndexType =
           RankedTensorType::get(indicesShape, rewriter.getI32Type());
-      Value runtimeIndices = adaptor.getIndices();
+      Value runtimeIndices = runtimeIndicesInput;
       auto workingIndexType = runtimeIndexType;
       bool flattenRuntimeIndices = indicesRank > 4;
       if (flattenRuntimeIndices) {
@@ -334,16 +391,27 @@ public:
     // Gather against logical ONNX dimensions. Rank-4 FP32 values are physical
     // NHWC in the TFL graph, so restore data to NCHW independently of whether
     // the result itself is rank 4.
-    if (dataRank == 4) {
+    if (!hasPerValueLayout && dataRank == 4) {
       Value permutation =
           createI32ShapeConstant(rewriter, op.getLoc(), {0, 3, 1, 2});
       data = createTFLOperation(rewriter, op.getLoc(), "tfl.transpose",
           TypeRange{sourceDataType}, ValueRange{data, permutation})
                  ->getResult(0);
     }
+    RankedTensorType calculationResultType =
+        hasPerValueLayout ? logicalResultType : sourceResultType;
     Value gathered = createTFLOperation(rewriter, op.getLoc(), "tfl.gather_nd",
-        TypeRange{sourceResultType}, ValueRange{data, coordinateValue})
+        TypeRange{calculationResultType}, ValueRange{data, coordinateValue})
                          ->getResult(0);
+    if (hasPerValueLayout) {
+      FailureOr<Value> result = convertTFLValueLayout(rewriter, op.getLoc(),
+          gathered, logicalResultType, resultIdentity,
+          getONNXToTFLPhysicalToLogicalLayout(sourceResultType));
+      if (failed(result))
+        return failure();
+      rewriter.replaceOp(op, *result);
+      return success();
+    }
     if (resultRank != 4) {
       rewriter.replaceOp(op, gathered);
       return success();

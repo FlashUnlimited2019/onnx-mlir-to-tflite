@@ -23,14 +23,16 @@ public:
     auto sourceResultType = dyn_cast<RankedTensorType>(op.getType());
     bool supportedElementType =
         sourceInputType && sourceResultType &&
-        (sourceInputType.getElementType().isF32() ||
+        (sourceInputType.getElementType().isInteger(1) ||
+            sourceInputType.getElementType().isF32() ||
             sourceInputType.getElementType().isSignlessInteger(64)) &&
         sourceResultType.getElementType() == sourceInputType.getElementType();
     if (!sourceInputType || !sourceResultType ||
         !sourceInputType.hasStaticShape() ||
         !sourceResultType.hasStaticShape() || !supportedElementType) {
-      op.emitError("ONNXToTFL Expand requires static same-type FP32 or i64 "
-                   "input/result tensors");
+      op.emitError(
+          "ONNXToTFL Expand requires static same-type bool, FP32, or i64 "
+          "input/result tensors");
       return failure();
     }
     if (sourceInputType.getRank() > 5 || sourceResultType.getRank() > 5) {

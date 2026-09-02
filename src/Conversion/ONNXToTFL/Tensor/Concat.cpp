@@ -50,16 +50,19 @@ public:
       op.emitError() << "unsupported Concat axis " << rawAxis;
       return failure();
     }
-    if (rank == 4 && resultType.getElementType().isF32())
-      axis = mapNCHWAxisToNHWC(axis);
+    axis = mapONNXToTFLLogicalAxis(resultType, axis);
+    if (axis < 0)
+      return op.emitError("Concat result has an invalid layout encoding"),
+             failure();
 
     SmallVector<NamedAttribute> attributes{
         rewriter.getNamedAttr("axis", rewriter.getI32IntegerAttr(axis)),
         getFusedActivationNone(rewriter)};
-    Operation *newOp =
-        createTFLOperation(rewriter, op.getLoc(), "tfl.concatenation",
-            TypeRange{convertRank4NCHWToNHWCType(op->getResult(0).getType())},
-            inputs, attributes);
+    Operation *newOp = createTFLOperation(rewriter, op.getLoc(),
+        "tfl.concatenation",
+        TypeRange{
+            this->getTypeConverter()->convertType(op->getResult(0).getType())},
+        inputs, attributes);
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }

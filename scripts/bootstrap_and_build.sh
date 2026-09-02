@@ -106,6 +106,7 @@ run cmake -E chdir "${TENSORFLOW_ROOT}" "${BAZEL_ENV[@]}" \
 run cmake \
   -U FETCHCONTENT_SOURCE_DIR_ABSL \
   -U FETCHCONTENT_SOURCE_DIR_PROTOBUF \
+  -U absl_DIR \
   -U absl_SOURCE_DIR \
   -U protobuf_SOURCE_DIR \
   -U utf8_range_SOURCE_DIR \

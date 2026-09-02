@@ -72,6 +72,14 @@ public:
       autoPad = attr.getValue();
     StringRef padding;
     Value input = adaptor.getOperands()[0];
+    SmallVector<int64_t> channelsLastLayout{0, 2, 3, 1};
+    auto logicalInputType = stripONNXToTFLLayoutEncoding(inputType);
+    FailureOr<Value> channelsLastInput =
+        convertTFLValueLayout(rewriter, op.getLoc(), input, logicalInputType,
+            getONNXToTFLPhysicalToLogicalLayout(inputType), channelsLastLayout);
+    if (failed(channelsLastInput))
+      return failure();
+    input = *channelsLastInput;
     if (autoPad == "VALID") {
       padding = "VALID";
     } else if (autoPad == "SAME_UPPER") {
@@ -119,11 +127,23 @@ public:
         rewriter.getNamedAttr(
             "filter_height", rewriter.getI32IntegerAttr(kernel[0])),
         getFusedActivationNone(rewriter)};
-    Type convertedResultType = convertRank4NCHWToNHWCType(resultType);
+    auto logicalResultType = stripONNXToTFLLayoutEncoding(resultType);
+    auto channelsLastEncoding =
+        DenseI64ArrayAttr::get(rewriter.getContext(), channelsLastLayout);
+    auto channelsLastResultType =
+        RankedTensorType::get(logicalResultType.getShape(),
+            logicalResultType.getElementType(), channelsLastEncoding);
+    Type convertedResultType =
+        convertONNXToTFLPhysicalType(channelsLastResultType);
     Operation *newOp =
         createTFLOperation(rewriter, op.getLoc(), "tfl.max_pool_2d",
             TypeRange{convertedResultType}, ValueRange{input}, attributes);
-    rewriter.replaceOp(op, newOp->getResults());
+    FailureOr<Value> physicalResult = convertTFLValueLayout(rewriter,
+        op.getLoc(), newOp->getResult(0), logicalResultType, channelsLastLayout,
+        getONNXToTFLPhysicalToLogicalLayout(resultType));
+    if (failed(physicalResult))
+      return failure();
+    rewriter.replaceOp(op, *physicalResult);
     return success();
   }
 };

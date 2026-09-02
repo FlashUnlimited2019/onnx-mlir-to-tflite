@@ -9,6 +9,7 @@
 #include "llvm/ADT/DenseSet.h"
 
 #include <limits>
+#include <numeric>
 
 using namespace mlir;
 
@@ -94,6 +95,31 @@ public:
       return failure();
     }
 
+    bool hasPerValueLayout = dataType.getEncoding() ||
+                             updatesType.getEncoding() ||
+                             resultType.getEncoding();
+    SmallVector<int64_t> dataIdentity(dataRank);
+    SmallVector<int64_t> updatesIdentity(updatesRank);
+    std::iota(dataIdentity.begin(), dataIdentity.end(), 0);
+    std::iota(updatesIdentity.begin(), updatesIdentity.end(), 0);
+    auto logicalDataType = stripONNXToTFLLayoutEncoding(dataType);
+    auto logicalUpdatesType = stripONNXToTFLLayoutEncoding(updatesType);
+    auto logicalResultType = stripONNXToTFLLayoutEncoding(resultType);
+    Value data = adaptor.getData();
+    Value updates = adaptor.getUpdates();
+    if (hasPerValueLayout) {
+      FailureOr<Value> logicalData =
+          convertTFLValueLayout(rewriter, op.getLoc(), data, logicalDataType,
+              getONNXToTFLPhysicalToLogicalLayout(dataType), dataIdentity);
+      FailureOr<Value> logicalUpdates = convertTFLValueLayout(rewriter,
+          op.getLoc(), updates, logicalUpdatesType,
+          getONNXToTFLPhysicalToLogicalLayout(updatesType), updatesIdentity);
+      if (failed(logicalData) || failed(logicalUpdates))
+        return failure();
+      data = *logicalData;
+      updates = *logicalUpdates;
+    }
+
     int64_t tupleCount = indicesType.getNumElements() / indexDepth;
     SmallVector<int32_t> normalizedIndices;
     normalizedIndices.reserve(indicesType.getNumElements());
@@ -147,9 +173,12 @@ public:
           ->getResult(0);
     };
 
-    Value data = restoreLogicalRank4(adaptor.getData(), dataType);
-    Value updates = restoreLogicalRank4(adaptor.getUpdates(), updatesType);
-    auto calculationUpdatesType = updatesType;
+    if (!hasPerValueLayout) {
+      data = restoreLogicalRank4(data, dataType);
+      updates = restoreLogicalRank4(updates, updatesType);
+    }
+    auto calculationUpdatesType =
+        hasPerValueLayout ? logicalUpdatesType : updatesType;
     if (flattenCoordinates) {
       SmallVector<int64_t> calculationUpdatesShape{tupleCount};
       calculationUpdatesShape.append(
@@ -191,13 +220,22 @@ public:
     Value shape = createI32ShapeConstant(rewriter, op.getLoc(), dataShape);
     Value sparseDeltas =
         createTFLOperation(rewriter, op.getLoc(), "tfl.scatter_nd",
-            TypeRange{dataType}, ValueRange{coordinates, deltas, shape})
+            TypeRange{hasPerValueLayout ? logicalDataType : dataType},
+            ValueRange{coordinates, deltas, shape})
             ->getResult(0);
     Value result = createTFLOperation(rewriter, op.getLoc(), "tfl.add",
-        TypeRange{resultType}, ValueRange{data, sparseDeltas}, fusedNone)
+        TypeRange{hasPerValueLayout ? logicalResultType : resultType},
+        ValueRange{data, sparseDeltas}, fusedNone)
                        ->getResult(0);
 
-    if (resultType.getRank() == 4) {
+    if (hasPerValueLayout) {
+      FailureOr<Value> physicalResult = convertTFLValueLayout(rewriter,
+          op.getLoc(), result, logicalResultType, dataIdentity,
+          getONNXToTFLPhysicalToLogicalLayout(resultType));
+      if (failed(physicalResult))
+        return failure();
+      result = *physicalResult;
+    } else if (resultType.getRank() == 4) {
       Type physicalResultType = convertRank4NCHWToNHWCType(resultType);
       Value permutation =
           createI32ShapeConstant(rewriter, op.getLoc(), {0, 2, 3, 1});

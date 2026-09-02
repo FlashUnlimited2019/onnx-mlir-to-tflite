@@ -73,10 +73,12 @@ public:
     if (dataRank > 5 && indicesRank == 0 && resultRank == dataRank - 1 &&
         axisSize == 1 && succeeded(indexValues) && indexValues->size() == 1 &&
         ((*indexValues)[0] == 0 || (*indexValues)[0] == -1)) {
+      auto physicalResultType = cast<RankedTensorType>(
+          convertONNXToTFLPhysicalType(sourceResultType));
       Value resultShape = createI32ShapeConstant(
-          rewriter, op.getLoc(), sourceResultType.getShape());
+          rewriter, op.getLoc(), physicalResultType.getShape());
       Value result = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
-          TypeRange{sourceResultType},
+          TypeRange{physicalResultType},
           ValueRange{adaptor.getData(), resultShape})
                          ->getResult(0);
       rewriter.replaceOp(op, result);
@@ -123,18 +125,78 @@ public:
       };
       Value zero = makeScalar(0);
       Value extent = makeScalar(axisSize);
+      auto physicalIndicesType = cast<RankedTensorType>(
+          convertONNXToTFLPhysicalType(sourceIndicesType));
       auto conditionType = RankedTensorType::get(
-          sourceIndicesType.getShape(), rewriter.getI1Type());
+          physicalIndicesType.getShape(), rewriter.getI1Type());
       Value negative = createTFLOperation(rewriter, op.getLoc(), "tfl.less",
           TypeRange{conditionType}, ValueRange{indices, zero})
                            ->getResult(0);
       SmallVector<NamedAttribute> fusedNone{getFusedActivationNone(rewriter)};
       Value wrapped = createTFLOperation(rewriter, op.getLoc(), "tfl.add",
-          TypeRange{sourceIndicesType}, ValueRange{indices, extent}, fusedNone)
+          TypeRange{physicalIndicesType}, ValueRange{indices, extent},
+          fusedNone)
                           ->getResult(0);
       indices = createTFLOperation(rewriter, op.getLoc(), "tfl.select_v2",
-          TypeRange{sourceIndicesType}, ValueRange{negative, wrapped, indices})
+          TypeRange{physicalIndicesType},
+          ValueRange{negative, wrapped, indices})
                     ->getResult(0);
+    }
+
+    bool hasPerValueLayout = sourceDataType.getEncoding() ||
+                             sourceIndicesType.getEncoding() ||
+                             sourceResultType.getEncoding();
+    if (hasPerValueLayout) {
+      SmallVector<int64_t> dataLayout =
+          getONNXToTFLPhysicalToLogicalLayout(sourceDataType);
+      SmallVector<int64_t> indicesLayout =
+          getONNXToTFLPhysicalToLogicalLayout(sourceIndicesType);
+      int64_t physicalAxis = mapONNXToTFLLogicalAxis(sourceDataType, axis);
+      if (physicalAxis < 0)
+        return op.emitError("Gather data has an invalid layout encoding"),
+               failure();
+
+      SmallVector<int64_t> naturalResultLayout;
+      naturalResultLayout.reserve(resultRank);
+      auto mapDataDimension = [&](int64_t logicalDimension) {
+        return logicalDimension < axis ? logicalDimension
+                                       : logicalDimension + indicesRank - 1;
+      };
+      for (int64_t physicalDataDimension : dataLayout) {
+        if (physicalDataDimension == axis) {
+          for (int64_t physicalIndexDimension : indicesLayout)
+            naturalResultLayout.push_back(axis + physicalIndexDimension);
+        } else {
+          naturalResultLayout.push_back(
+              mapDataDimension(physicalDataDimension));
+        }
+      }
+      if (static_cast<int64_t>(naturalResultLayout.size()) != resultRank)
+        return op.emitError("Gather layouts do not match the result rank"),
+               failure();
+
+      auto logicalResultType = stripONNXToTFLLayoutEncoding(sourceResultType);
+      auto naturalEncoding =
+          DenseI64ArrayAttr::get(rewriter.getContext(), naturalResultLayout);
+      auto naturalEncodedType =
+          RankedTensorType::get(logicalResultType.getShape(),
+              logicalResultType.getElementType(), naturalEncoding);
+      Type naturalPhysicalType =
+          convertONNXToTFLPhysicalType(naturalEncodedType);
+      SmallVector<NamedAttribute> attributes{
+          rewriter.getNamedAttr(
+              "axis", rewriter.getI32IntegerAttr(physicalAxis)),
+          rewriter.getNamedAttr("batch_dims", rewriter.getI32IntegerAttr(0))};
+      Value gathered = createTFLOperation(rewriter, op.getLoc(), "tfl.gather",
+          TypeRange{naturalPhysicalType}, ValueRange{data, indices}, attributes)
+                           ->getResult(0);
+      FailureOr<Value> result = convertTFLValueLayout(rewriter, op.getLoc(),
+          gathered, logicalResultType, naturalResultLayout,
+          getONNXToTFLPhysicalToLogicalLayout(sourceResultType));
+      if (failed(result))
+        return failure();
+      rewriter.replaceOp(op, *result);
+      return success();
     }
 
     bool usesFP32ActivationLayout = dataElementType.isF32();

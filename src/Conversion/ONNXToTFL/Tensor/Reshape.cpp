@@ -7,6 +7,7 @@
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
 #include <limits>
+#include <numeric>
 
 using namespace mlir;
 
@@ -42,6 +43,57 @@ public:
         allowZero && allowZero.getValue().getSExtValue() != 0) {
       op.emitError("unsupported Reshape configuration: allowzero=1");
       return failure();
+    }
+
+    bool hasPerValueLayout =
+        isa_and_nonnull<DenseI64ArrayAttr>(sourceDataType.getEncoding()) ||
+        isa_and_nonnull<DenseI64ArrayAttr>(sourceResultType.getEncoding());
+    if (hasPerValueLayout) {
+      auto logicalDataType = stripONNXToTFLLayoutEncoding(sourceDataType);
+      auto logicalResultType = stripONNXToTFLLayoutEncoding(sourceResultType);
+      SmallVector<int64_t> dataLayout =
+          getONNXToTFLPhysicalToLogicalLayout(sourceDataType);
+      SmallVector<int64_t> resultLayout =
+          getONNXToTFLPhysicalToLogicalLayout(sourceResultType);
+      FailureOr<SmallVector<int64_t>> zeroCopyResultLayout =
+          computeONNXToTFLSingletonReshapeLayout(logicalDataType.getShape(),
+              logicalResultType.getShape(), dataLayout);
+      if (succeeded(zeroCopyResultLayout) &&
+          *zeroCopyResultLayout == resultLayout) {
+        auto physicalResultType = cast<RankedTensorType>(
+            this->getTypeConverter()->convertType(sourceResultType));
+        Value physicalShape = createI32ShapeConstant(
+            rewriter, op.getLoc(), physicalResultType.getShape());
+        Value result = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+            TypeRange{physicalResultType}, ValueRange{data, physicalShape})
+                           ->getResult(0);
+        rewriter.replaceOp(op, result);
+        return success();
+      }
+      SmallVector<int64_t> dataIdentity(sourceDataType.getRank());
+      SmallVector<int64_t> resultIdentity(sourceResultType.getRank());
+      std::iota(dataIdentity.begin(), dataIdentity.end(), 0);
+      std::iota(resultIdentity.begin(), resultIdentity.end(), 0);
+
+      FailureOr<Value> logicalData = convertTFLValueLayout(rewriter,
+          op.getLoc(), data, logicalDataType, dataLayout, dataIdentity);
+      if (failed(logicalData))
+        return failure();
+      Value logicalShape = createI32ShapeConstant(
+          rewriter, op.getLoc(), logicalResultType.getShape());
+      Value logicalResult = createTFLOperation(rewriter, op.getLoc(),
+          "tfl.reshape", TypeRange{logicalResultType},
+          ValueRange{*logicalData, logicalShape})
+                                ->getResult(0);
+      FailureOr<Value> physicalResult =
+          convertTFLValueLayout(rewriter, op.getLoc(), logicalResult,
+              logicalResultType, resultIdentity, resultLayout);
+      if (failed(physicalResult) ||
+          (*physicalResult).getType() !=
+              this->getTypeConverter()->convertType(sourceResultType))
+        return failure();
+      rewriter.replaceOp(op, *physicalResult);
+      return success();
     }
 
     // The inferred static result shape is authoritative. Materializing it
