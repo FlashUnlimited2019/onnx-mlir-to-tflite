@@ -13,9 +13,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import List, Optional
 
 
-def _find_tool(name: str, explicit: str | None, script: Path) -> Path:
+def _find_tool(name: str, explicit: Optional[str], script: Path) -> Path:
     if explicit:
         candidate = Path(explicit).expanduser().resolve()
         if candidate.is_file():
@@ -57,7 +58,7 @@ def _find_tool(name: str, explicit: str | None, script: Path) -> Path:
     raise FileNotFoundError(f"unable to find {name}; searched PATH and: {searched}")
 
 
-def _run(command: list[str], stage: str) -> None:
+def _run(command: List[str], stage: str) -> None:
     print("+ " + " ".join(command), file=sys.stderr)
     completed = subprocess.run(command, text=True, capture_output=True)
     if completed.stdout:
@@ -80,18 +81,29 @@ def _parse_args() -> argparse.Namespace:
         "--flatbuffer-translate", help="path to TensorFlow flatbuffer_translate"
     )
     parser.add_argument("--litert-opt", help="path to TensorFlow litert-opt")
-    parser.add_argument(
+    optimize_group = parser.add_mutually_exclusive_group()
+    optimize_group.add_argument(
         "--optimize-tfl",
-        action=argparse.BooleanOptionalAction,
-        default=True,
+        dest="optimize_tfl",
+        action="store_true",
         help="run TensorFlow TFL canonicalization/fusion before export",
     )
+    optimize_group.add_argument(
+        "--no-optimize-tfl",
+        dest="optimize_tfl",
+        action="store_false",
+        help="skip TensorFlow TFL canonicalization/fusion",
+    )
+    parser.set_defaults(optimize_tfl=True)
     parser.add_argument("--dump-onnx-mlir", action="store_true")
     parser.add_argument("--dump-tfl-mlir", action="store_true")
     parser.add_argument("--keep-intermediate-files", action="store_true")
-    parser.add_argument(
-        "--verify-each", action=argparse.BooleanOptionalAction, default=True
+    verify_group = parser.add_mutually_exclusive_group()
+    verify_group.add_argument("--verify-each", dest="verify_each", action="store_true")
+    verify_group.add_argument(
+        "--no-verify-each", dest="verify_each", action="store_false"
     )
+    parser.set_defaults(verify_each=True)
     parser.add_argument(
         "--layout-mode",
         choices=("legacy", "experimental"),
@@ -104,16 +116,24 @@ def _parse_args() -> argparse.Namespace:
         default="none",
         help="print per-value layout analysis diagnostics",
     )
-    parser.add_argument(
+    buffer_offset_group = parser.add_mutually_exclusive_group()
+    buffer_offset_group.add_argument(
         "--use-buffer-offset",
-        action=argparse.BooleanOptionalAction,
-        default=None,
+        dest="use_buffer_offset",
+        action="store_true",
         help=(
             "append constants outside the FlatBuffer metadata and reference "
             "them by file offset; enabled automatically for a model with a "
             "large adjacent .data file"
         ),
     )
+    buffer_offset_group.add_argument(
+        "--no-use-buffer-offset",
+        dest="use_buffer_offset",
+        action="store_false",
+        help="disable TFLite buffer offsets",
+    )
+    parser.set_defaults(use_buffer_offset=None)
     return parser.parse_args()
 
 
@@ -286,19 +306,17 @@ def main() -> int:
         # Only publish a file after export and schema round-trip validation.
         # Stage it next to the destination so the final atomic rename never
         # crosses a filesystem boundary (the work directory is usually /tmp).
-        staged_path: Path | None = None
+        staged_path: Optional[Path] = None
         try:
-            with (
-                flatbuffer_path.open("rb") as source,
-                tempfile.NamedTemporaryFile(
+            with flatbuffer_path.open("rb") as source:
+                with tempfile.NamedTemporaryFile(
                     mode="wb",
                     prefix=f".{output_path.name}.",
                     dir=output_path.parent,
                     delete=False,
-                ) as staged,
-            ):
-                shutil.copyfileobj(source, staged)
-                staged_path = Path(staged.name)
+                ) as staged:
+                    shutil.copyfileobj(source, staged)
+                    staged_path = Path(staged.name)
             os.replace(staged_path, output_path)
             staged_path = None
         finally:
