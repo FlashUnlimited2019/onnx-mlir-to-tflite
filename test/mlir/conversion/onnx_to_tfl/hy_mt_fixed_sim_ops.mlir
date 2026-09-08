@@ -16,7 +16,7 @@ module {
   "onnx.EntryPoint"() {func = @attention_mask_cast_gather_unsqueeze} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x88xi64>, %arg1: tensor<88xi64>) -> tensor<1x1x88x1xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x88xi64>{{( \{[^}]*\})?}}, %arg1: tensor<88xi64>{{( \{[^}]*\})?}}) -> (tensor<1x1x88x1xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[MASK:.+]] = "tfl.cast"(%arg0) : (tensor<1x88xi64>) -> tensor<1x88xi1>
 // CHECK: %[[REVERSED:.+]] = "tfl.gather"(%[[MASK]], {{.*}}) {axis = 1 : i32, batch_dims = 0 : i32} : (tensor<1x88xi1>, tensor<88xi64>) -> tensor<1x88xi1>
 // CHECK: %[[EXPANDED:.+]] = "tfl.reshape"(%[[REVERSED]], {{.*}}) : (tensor<1x88xi1>, tensor<4xi32>) -> tensor<1x1x1x88xi1>

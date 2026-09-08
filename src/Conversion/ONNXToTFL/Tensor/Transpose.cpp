@@ -82,10 +82,14 @@ public:
     // layouts often carry inert singleton axes; remove enough of them before
     // the real permutation and restore the logical result with a Reshape.
     if (rank > 5) {
+      // Layout-aware boundary conversions may have a logical identity perm
+      // but a non-identity physical perm. Reduce the actual TFL tensor axes.
+      auto physicalInputType = cast<RankedTensorType>(data.getType());
+      auto physicalResultType = cast<RankedTensorType>(convertedResultType);
       SmallVector<bool> dropped(rank, false);
       int64_t axesToDrop = rank - 5;
       for (int64_t axis = 0; axis < rank && axesToDrop > 0; ++axis) {
-        if (inputType.getShape()[axis] != 1)
+        if (physicalInputType.getShape()[axis] != 1)
           continue;
         dropped[axis] = true;
         --axesToDrop;
@@ -101,15 +105,15 @@ public:
         if (dropped[axis])
           continue;
         oldToReduced[axis] = reducedInputShape.size();
-        reducedInputShape.push_back(inputType.getShape()[axis]);
+        reducedInputShape.push_back(physicalInputType.getShape()[axis]);
       }
       SmallVector<int64_t> reducedOutputShape;
       SmallVector<int64_t> reducedPermutation;
       for (int64_t outputAxis = 0; outputAxis < rank; ++outputAxis) {
-        int64_t inputAxis = permutation[outputAxis];
+        int64_t inputAxis = physicalPermutation[outputAxis];
         if (dropped[inputAxis])
           continue;
-        reducedOutputShape.push_back(resultType.getShape()[outputAxis]);
+        reducedOutputShape.push_back(physicalResultType.getShape()[outputAxis]);
         reducedPermutation.push_back(oldToReduced[inputAxis]);
       }
 
@@ -129,10 +133,11 @@ public:
           "tfl.transpose", TypeRange{reducedOutputType},
           ValueRange{reducedInput, reducedPermutationValue})
                                 ->getResult(0);
-      Value restoredShape =
-          createI32ShapeConstant(rewriter, op.getLoc(), resultType.getShape());
+      Value restoredShape = createI32ShapeConstant(
+          rewriter, op.getLoc(), physicalResultType.getShape());
       Value restored = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
-          TypeRange{resultType}, ValueRange{reducedResult, restoredShape})
+          TypeRange{physicalResultType},
+          ValueRange{reducedResult, restoredShape})
                            ->getResult(0);
       rewriter.replaceOp(op, restored);
       return success();

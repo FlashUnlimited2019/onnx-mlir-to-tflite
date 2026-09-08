@@ -13,7 +13,7 @@ module {
   "onnx.EntryPoint"() {func = @forward} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<3x1x2xf32>) -> (tensor<3x1x2x1xf32>, tensor<1x1x2xf32>, tensor<1x1x2xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<3x1x2xf32>{{( \{[^}]*\})?}}) -> (tensor<3x1x2x1xf32>{{( \{[^}]*\})?}}, tensor<1x1x2xf32>{{( \{[^}]*\})?}}, tensor<1x1x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.split_v"{{.*}}{num_splits = 3 : i32}
 // CHECK: "tfl.batch_matmul"
 // CHECK: "tfl.batch_matmul"
@@ -53,7 +53,7 @@ module {
   "onnx.EntryPoint"() {func = @bidirectional_lens_clip} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x2x3xf32>, %arg1: tensor<2x2x1xf32>, %arg2: tensor<2x2x1xf32>) -> (tensor<2x2x1x2xf32>, tensor<2x2x1xf32>, tensor<2x2x1xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x2x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<2x2x1xf32>{{( \{[^}]*\})?}}, %arg2: tensor<2x2x1xf32>{{( \{[^}]*\})?}}) -> (tensor<2x2x1x2xf32>{{( \{[^}]*\})?}}, tensor<2x2x1xf32>{{( \{[^}]*\})?}}, tensor<2x2x1xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.split_v"{{.*}}{num_splits = 2 : i32}
 // CHECK: "tfl.split_v"{{.*}}{num_splits = 2 : i32}
 // CHECK: "tfl.split_v"{{.*}}{num_splits = 2 : i32}

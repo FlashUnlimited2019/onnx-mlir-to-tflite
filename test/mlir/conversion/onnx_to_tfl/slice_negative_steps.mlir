@@ -16,7 +16,7 @@ module {
   "onnx.EntryPoint"() {func = @slice_rank4_reverse} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x256x256x1xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x256x256x1xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[AXIS:.*]] = arith.constant dense<2> : tensor<1xi32>
 // CHECK: %[[REVERSED:.*]] = "tfl.reverse_v2"(%arg0, %[[AXIS]]) : (tensor<1x256x256x1xf32>, tensor<1xi32>) -> tensor<1x256x256x1xf32>
 // CHECK: %[[BEGIN:.*]] = arith.constant dense<0> : tensor<4xi32>
@@ -40,7 +40,7 @@ module {
   "onnx.EntryPoint"() {func = @slice_rank2_reverse_to_start} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x9xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x9xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[REVERSED:.*]] = "tfl.reverse_v2"(%arg0, {{.*}}) : (tensor<2x9xf32>, tensor<1xi32>) -> tensor<2x9xf32>
 // CHECK: "tfl.strided_slice"(%[[REVERSED]], {{.*}}) {{.*}} : (tensor<2x9xf32>, tensor<2xi32>, tensor<2xi32>, tensor<2xi32>) -> tensor<2x5xf32>
 // CHECK-NOT: onnx.

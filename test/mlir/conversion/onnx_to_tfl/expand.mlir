@@ -13,7 +13,7 @@ module {
   "onnx.EntryPoint"() {func = @expand_bool_rank4} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x1x6xi1>) -> tensor<1x1x6x6xi1>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x1x6xi1>{{( \{[^}]*\})?}}) -> (tensor<1x1x6x6xi1>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<[1, 1, 6, 6]> : tensor<4xi32>
 // CHECK: "tfl.broadcast_to"(%arg0, {{.*}}) : (tensor<1x1x1x6xi1>, tensor<4xi32>) -> tensor<1x1x6x6xi1>
 // CHECK-NOT: onnx.

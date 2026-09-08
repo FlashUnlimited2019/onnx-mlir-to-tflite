@@ -13,7 +13,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @scatter_identity_rank4} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x1xf32>, %arg1: tensor<1x3x4x1xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x1xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x3x4x1xf32>{{( \{[^}]*\})?}})
 // CHECK-NOT: scatter
 // CHECK: return %arg1
 
@@ -45,6 +45,6 @@ module {
   }
   "onnx.EntryPoint"() {func = @scatter_identity_negative} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x3xf32>, %arg1: tensor<2x3xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<2x3xf32>{{( \{[^}]*\})?}})
 // CHECK-NOT: scatter
 // CHECK: return %arg1

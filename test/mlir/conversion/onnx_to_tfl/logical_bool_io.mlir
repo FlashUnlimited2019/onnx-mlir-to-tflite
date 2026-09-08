@@ -9,7 +9,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @logical_broadcast} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xi1>, %arg1: tensor<1x2x1x1xi1>) -> tensor<1x2x3x4xi1>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xi1>{{( \{[^}]*\})?}}, %arg1: tensor<1x2x1x1xi1>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x4xi1>{{( \{[^}]*\})?}})
 // CHECK: "tfl.logical_and"(%arg0, %arg1) : (tensor<1x2x3x4xi1>, tensor<1x2x1x1xi1>) -> tensor<1x2x3x4xi1>
 
 // -----
@@ -35,7 +35,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @logical_tensor_ops} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xi1>) -> tensor<1x96xi1>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xi1>{{( \{[^}]*\})?}}) -> (tensor<1x96xi1>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x2x3x4xi1>, tensor<3xi32>) -> tensor<2x3x4xi1>
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<1x2x3x4xi1>, tensor<4xi32>) -> tensor<1x3x2x4xi1>
 // CHECK: "tfl.reshape"({{.*}}, {{.*}}) : (tensor<1x3x2x4xi1>, tensor<2xi32>) -> tensor<1x24xi1>
@@ -52,7 +52,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @logical_rank5_broadcast} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x3x2x3x4xi1>, %arg1: tensor<1x3x2x1x1xi1>) -> tensor<2x3x2x3x4xi1>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x3x2x3x4xi1>{{( \{[^}]*\})?}}, %arg1: tensor<1x3x2x1x1xi1>{{( \{[^}]*\})?}}) -> (tensor<2x3x2x3x4xi1>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<2x3x2x3x4xi1>, tensor<1xi32>) -> tensor<144xi1>
 // CHECK: "tfl.broadcast_to"(%arg1, {{.*}}) : (tensor<1x3x2x1x1xi1>, tensor<5xi32>) -> tensor<2x3x2x3x4xi1>
 // CHECK: "tfl.reshape"({{.*}}, {{.*}}) : (tensor<2x3x2x3x4xi1>, tensor<1xi32>) -> tensor<144xi1>

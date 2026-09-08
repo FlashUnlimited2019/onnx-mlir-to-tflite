@@ -10,7 +10,7 @@ module {
   "onnx.EntryPoint"() {func = @bilinear} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x2xf32>, %arg1: tensor<1x3x2x2xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x2xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x3x2x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"(%arg1, {{.*}}) : (tensor<1x3x2x2xf32>, tensor<4xi32>) -> tensor<1x2x3x2xf32>
 // CHECK-COUNT-4: "tfl.gather_nd"{{.*}} : (tensor<1x4x5x2xf32>, tensor<1x2x3x3xi32>) -> tensor<1x2x3x2xf32>
 // CHECK: return {{.*}} : tensor<1x2x3x2xf32>
@@ -26,7 +26,7 @@ module {
   "onnx.EntryPoint"() {func = @cubic} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x2xf32>, %arg1: tensor<1x3x2x2xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x2xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x3x2x2xf32>{{( \{[^}]*\})?}})
 // CHECK-COUNT-16: "tfl.gather_nd"{{.*}} : (tensor<1x4x5x2xf32>, tensor<1x2x3x3xi32>) -> tensor<1x2x3x2xf32>
 // CHECK-NOT: onnx.
 
@@ -40,7 +40,7 @@ module {
   "onnx.EntryPoint"() {func = @reflection} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x2xf32>, %arg1: tensor<1x3x2x2xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x2xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x3x2x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.floor_mod"
 // CHECK: "tfl.select_v2"
 // CHECK-COUNT-4: "tfl.gather_nd"{{.*}} : (tensor<1x4x5x2xf32>, tensor<1x2x3x3xi32>) -> tensor<1x2x3x2xf32>
@@ -56,7 +56,7 @@ module {
   "onnx.EntryPoint"() {func = @nearest} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x2xf32>, %arg1: tensor<1x3x2x2xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x2xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x3x2x2xf32>{{( \{[^}]*\})?}})
 // CHECK-COUNT-2: "tfl.round"
 // CHECK-COUNT-1: "tfl.gather_nd"{{.*}} : (tensor<1x4x5x2xf32>, tensor<1x2x3x3xi32>) -> tensor<1x2x3x2xf32>
 // CHECK-NOT: onnx.

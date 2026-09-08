@@ -67,11 +67,14 @@ bool isSupportedONNXOperation(Operation *op) {
          })(op);
 }
 
-StringRef getONNXValueName(func::FuncOp function, unsigned index, bool result) {
+std::string getEntryValueName(
+    func::FuncOp function, unsigned index, bool result) {
   StringAttr name =
       result ? function.getResultAttrOfType<StringAttr>(index, "onnx.name")
              : function.getArgAttrOfType<StringAttr>(index, "onnx.name");
-  return name ? name.getValue() : StringRef();
+  if (name && !name.getValue().empty())
+    return name.getValue().str();
+  return (result ? "output" : "input") + std::to_string(index);
 }
 
 std::string joinValueNames(func::FuncOp function, bool result) {
@@ -82,11 +85,7 @@ std::string joinValueNames(func::FuncOp function, bool result) {
   for (unsigned i = 0; i < count; ++i) {
     if (i != 0)
       stream << ',';
-    StringRef name = getONNXValueName(function, i, result);
-    if (name.empty())
-      stream << (result ? "output" : "input") << i;
-    else
-      stream << name;
+    stream << getEntryValueName(function, i, result);
   }
   return joined;
 }
@@ -166,6 +165,18 @@ LogicalResult prepareEntryPoint(ModuleOp module) {
       builder.getNamedAttr("control_outputs", builder.getStringAttr(""))};
   function->setAttr(
       "tf.entry_function", builder.getDictionaryAttr(entryAttributes));
+  // These attributes let the TensorFlow exporter create a SignatureDef and
+  // map its public names to the final tensor indices, including aliased
+  // outputs. They are metadata only; no SavedModel or TensorFlow graph is used.
+  module->setAttr("tf_saved_model.semantics", builder.getUnitAttr());
+  function->setAttr("tf_saved_model.exported_names",
+      builder.getStrArrayAttr({"serving_default"}));
+  for (unsigned i = 0; i < function.getNumArguments(); ++i)
+    function.setArgAttr(i, "tf_saved_model.index_path",
+        builder.getStrArrayAttr({getEntryValueName(function, i, false)}));
+  for (unsigned i = 0; i < function.getNumResults(); ++i)
+    function.setResultAttr(i, "tf_saved_model.index_path",
+        builder.getStrArrayAttr({getEntryValueName(function, i, true)}));
   function.setPublic();
   function.setName("main");
   entry.erase();

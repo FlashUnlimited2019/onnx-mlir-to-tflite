@@ -11,7 +11,7 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<1> : tensor<1xi32>
 // CHECK: arith.constant dense<[0, 3, 1, 2]> : tensor<4xi32>
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<1x3x4x2xf32>, tensor<4xi32>) -> tensor<1x2x3x4xf32>
@@ -30,7 +30,7 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x384xi64>) -> tensor<1xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x384xi64>{{( \{[^}]*\})?}}) -> (tensor<1xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.sum"{{.*}} {keep_dims = false} : (tensor<1x384xi64>, tensor<1xi32>) -> tensor<1xi64>
 // CHECK: "tfl.cast"{{.*}} : (tensor<1xi64>) -> tensor<1xf32>
 // CHECK-NOT: onnx.

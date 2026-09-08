@@ -90,17 +90,34 @@ public:
           return op.emitError("Split result shape does not match split sizes"),
                  failure();
       }
-      resultTypes.push_back(convertRank4NCHWToNHWCType(sourceResultType));
+      resultTypes.push_back(
+          this->getTypeConverter()->convertType(sourceResultType));
     }
 
-    int64_t physicalAxis = rank == 4 ? mapNCHWAxisToNHWC(axis) : axis;
-    Value sizes = createI32ShapeConstant(rewriter, op.getLoc(), splitSizes);
+    int64_t physicalAxis = mapONNXToTFLLogicalAxis(sourceInputType, axis);
+    if (physicalAxis < 0)
+      return op.emitError("Split input has an invalid layout encoding"),
+             failure();
     Value splitDim = createI32ScalarTensorConstant(
         rewriter, op.getLoc(), static_cast<int32_t>(physicalAxis));
     SmallVector<NamedAttribute> attributes{rewriter.getNamedAttr(
         "num_splits", rewriter.getI32IntegerAttr(op->getNumResults()))};
-    Operation *split = createTFLOperation(rewriter, op.getLoc(), "tfl.split_v",
-        TypeRange{resultTypes}, ValueRange{input, sizes, splitDim}, attributes);
+    // Prefer the equal-split builtin when its semantics apply. Backends can
+    // support this simpler operation without supporting variable-sized splits.
+    // Keep empty partitions on the general path.
+    bool equal = splitSizes.front() > 0 &&
+                 llvm::all_of(splitSizes,
+                     [&](int64_t size) { return size == splitSizes.front(); });
+    Operation *split;
+    if (equal) {
+      split = createTFLOperation(rewriter, op.getLoc(), "tfl.split",
+          TypeRange{resultTypes}, ValueRange{splitDim, input}, attributes);
+    } else {
+      Value sizes = createI32ShapeConstant(rewriter, op.getLoc(), splitSizes);
+      split = createTFLOperation(rewriter, op.getLoc(), "tfl.split_v",
+          TypeRange{resultTypes}, ValueRange{input, sizes, splitDim},
+          attributes);
+    }
     rewriter.replaceOp(op, split->getResults());
     return success();
   }

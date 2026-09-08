@@ -11,7 +11,7 @@ module {
   "onnx.EntryPoint"() {func = @global_average_pool_rank3} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x9xf32>) -> tensor<2x4x1xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x9xf32>{{( \{[^}]*\})?}}) -> (tensor<2x4x1xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<2> : tensor<1xi32>
 // CHECK: "tfl.mean"(%arg0, {{.*}}) {keep_dims = true} : (tensor<2x4x9xf32>, tensor<1xi32>) -> tensor<2x4x1xf32>
 // CHECK-NOT: onnx.
@@ -27,7 +27,7 @@ module {
   "onnx.EntryPoint"() {func = @global_average_pool_rank5} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x2x4x5xf32>) -> tensor<1x3x1x1x1xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x2x4x5xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x1x1x1xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<[2, 3, 4]> : tensor<3xi32>
 // CHECK: "tfl.mean"(%arg0, {{.*}}) {keep_dims = true} : (tensor<1x3x2x4x5xf32>, tensor<3xi32>) -> tensor<1x3x1x1x1xf32>
 // CHECK-NOT: onnx.

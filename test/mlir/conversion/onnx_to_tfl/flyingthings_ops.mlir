@@ -10,7 +10,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @argmin_rank4} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>) -> tensor<1x2x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<1x3x4x2xf32>, tensor<4xi32>) -> tensor<1x2x3x4xf32>
 // CHECK: "tfl.arg_min"({{.*}}) : (tensor<1x2x3x4xf32>, tensor<i32>) -> tensor<1x2x3xi64>
 // CHECK: "tfl.cast"({{.*}}) : (tensor<1x2x3xi64>) -> tensor<1x2x3xf32>
@@ -24,7 +24,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @space_to_depth} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x6x2xf32>) -> tensor<1x2x3x8xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x6x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x8xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.space_to_depth"(%arg0) {block_size = 2 : i32} : (tensor<1x4x6x2xf32>) -> tensor<1x2x3x8xf32>
 
 // -----
@@ -46,7 +46,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @integer_warp_path} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>) -> (tensor<1x3x4x2xf32>, tensor<1x3x4x2xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x4x2xf32>{{( \{[^}]*\})?}}, tensor<1x3x4x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"({{.*}}) : (tensor<1x3x4x2xf32>, tensor<4xi32>) -> tensor<1x2x3x4xf32>
 // CHECK: "tfl.cast"({{.*}}) : (tensor<1x2x3x4xf32>) -> tensor<1x2x3x4xi32>
 // CHECK: "tfl.minimum"{{.*}} : (tensor<1x2x3x4xi32>, tensor<i32>) -> tensor<1x2x3x4xi32>
@@ -64,7 +64,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @reducible_rank5_upsample_and_pad} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x2x3x1xf32>) -> tensor<1x3x7x13x1xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x2x3x1xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x7x13x1xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x3x2x3x1xf32>, tensor<4xi32>) -> tensor<1x3x2x3xf32>
 // CHECK: "tfl.padv2"{{.*}} : (tensor<1x3x2x1x3xf32>, tensor<5x2xi32>, tensor<f32>) -> tensor<1x3x2x2x3xf32>
 // CHECK: "tfl.padv2"{{.*}} : (tensor<1x3x4x3x1xf32>, tensor<5x2xi32>, tensor<f32>) -> tensor<1x3x4x3x3xf32>
@@ -84,7 +84,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @rank6_slice_singleton_collapse} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4x1x5xf32>) -> tensor<1x2x3x2x1x5xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4x1x5xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x2x1x5xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x2x3x4x1x5xf32>, tensor<5xi32>) -> tensor<2x3x4x1x5xf32>
 // CHECK: "tfl.slice"{{.*}} : (tensor<2x3x4x1x5xf32>, tensor<5xi32>, tensor<5xi32>) -> tensor<2x3x2x1x5xf32>
 // CHECK: "tfl.reshape"{{.*}} : (tensor<2x3x2x1x5xf32>, tensor<6xi32>) -> tensor<1x2x3x2x1x5xf32>

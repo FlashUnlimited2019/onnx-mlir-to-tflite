@@ -12,7 +12,7 @@ module {
   "onnx.EntryPoint"() {func = @gather_runtime_indices} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<4x3xf32>, %arg1: tensor<1x2xi64>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<4x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x2xi64>{{( \{[^}]*\})?}})
 // CHECK: "tfl.less"(%arg1, {{.*}}) : (tensor<1x2xi64>, tensor<i64>) -> tensor<1x2xi1>
 // CHECK: "tfl.add"(%arg1, {{.*}}) {{.*}} : (tensor<1x2xi64>, tensor<i64>) -> tensor<1x2xi64>
 // CHECK: "tfl.select_v2"({{.*}}, {{.*}}, %arg1) : (tensor<1x2xi1>, tensor<1x2xi64>, tensor<1x2xi64>) -> tensor<1x2xi64>

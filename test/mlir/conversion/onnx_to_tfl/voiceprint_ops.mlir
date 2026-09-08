@@ -27,7 +27,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @tile_rank4_layout} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>) -> tensor<1x3x8x4xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x8x4xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<[1, 1, 2, 2]> : tensor<4xi32>
 // CHECK: "tfl.tile"(%arg0, {{.*}}) : (tensor<1x3x4x2xf32>, tensor<4xi32>) -> tensor<1x3x8x4xf32>
 // CHECK-NOT: onnx.

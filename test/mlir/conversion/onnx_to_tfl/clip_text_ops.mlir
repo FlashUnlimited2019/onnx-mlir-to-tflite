@@ -13,7 +13,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @cast_token_ids} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2xi64>, %arg1: tensor<8x4xf32>) -> (tensor<1x2x4xf32>, tensor<1xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2xi64>{{( \{[^}]*\})?}}, %arg1: tensor<8x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x4xf32>{{( \{[^}]*\})?}}, tensor<1xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[INDICES:.+]] = "tfl.cast"(%arg0) : (tensor<1x2xi64>) -> tensor<1x2xi32>
 // CHECK: "tfl.select_v2"{{.*}}%[[INDICES]]
 // CHECK: "tfl.gather"{{.*}} : (tensor<8x4xf32>, tensor<1x2xi32>) -> tensor<1x2x4xf32>

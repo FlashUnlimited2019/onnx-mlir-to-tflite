@@ -12,7 +12,7 @@ module {
   "onnx.EntryPoint"() {func = @upsample_and_pad_1d} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3xf32>) -> tensor<1x2x8xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x8xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x2x3xf32>, tensor<4xi32>) -> tensor<1x2x3x1xf32>
 // CHECK: "tfl.padv2"({{.*}}) : (tensor<1x2x3x1xf32>, tensor<4x2xi32>, tensor<f32>) -> tensor<1x2x3x2xf32>
 // CHECK: "tfl.reshape"({{.*}}) : (tensor<1x2x3x2xf32>, tensor<3xi32>) -> tensor<1x2x6xf32>

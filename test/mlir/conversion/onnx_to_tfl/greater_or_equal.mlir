@@ -10,7 +10,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @greater_equal_rank1} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<16xf32>, %arg1: tensor<16xf32>) -> tensor<16xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<16xf32>{{( \{[^}]*\})?}}, %arg1: tensor<16xf32>{{( \{[^}]*\})?}}) -> (tensor<16xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.greater_equal"(%arg0, %arg1) : (tensor<16xf32>, tensor<16xf32>) -> tensor<16xi1>
 // CHECK: "tfl.cast"({{.*}}) : (tensor<16xi1>) -> tensor<16xf32>
 
@@ -24,7 +24,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @greater_equal_rank4_rank3} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5x3xf32>, %arg1: tensor<3x4x5xf32>) -> tensor<2x4x5x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<3x4x5xf32>{{( \{[^}]*\})?}}) -> (tensor<2x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<2x4x5x3xf32>, tensor<4xi32>) -> tensor<2x3x4x5xf32>
 // CHECK: "tfl.greater_equal"({{.*}}, %arg1) : (tensor<2x3x4x5xf32>, tensor<3x4x5xf32>) -> tensor<2x3x4x5xi1>
 // CHECK: "tfl.cast"({{.*}}) : (tensor<2x3x4x5xi1>) -> tensor<2x3x4x5xf32>
@@ -40,7 +40,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @greater_equal_rank5_rank3} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4x5xf32>, %arg1: tensor<3x4x5xf32>) -> tensor<1x2x3x4x5xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4x5xf32>{{( \{[^}]*\})?}}, %arg1: tensor<3x4x5xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x4x5xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x2x3x4x5xf32>, tensor<1xi32>) -> tensor<120xf32>
 // CHECK: "tfl.broadcast_to"(%arg1, {{.*}}) : (tensor<3x4x5xf32>, tensor<5xi32>) -> tensor<1x2x3x4x5xf32>
 // CHECK: "tfl.reshape"({{.*}}) : (tensor<1x2x3x4x5xf32>, tensor<1xi32>) -> tensor<120xf32>

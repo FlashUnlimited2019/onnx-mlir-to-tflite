@@ -34,8 +34,8 @@ module {
 // CHECK: "tfl.transpose"
 // CHECK: "tfl.transpose"
 // CHECK-NOT: "tfl.transpose"
-// CHECK: "tfl.split_v"
-// CHECK-NOT: "tfl.split_v"
+// CHECK: "tfl.split"
+// CHECK-NOT: "tfl.split"
 // CHECK: "tfl.mul"
 // CHECK-NOT: "tfl.mul"
 // CHECK-NOT: onnx.

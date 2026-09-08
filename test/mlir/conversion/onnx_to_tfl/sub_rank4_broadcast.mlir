@@ -10,7 +10,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @sub_constant_lhs_channel} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>) -> tensor<1x4x5x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[WEIGHT:.*]] = arith.constant {{.*}} : tensor<1x1x1x3xf32>
 // CHECK: "tfl.sub"(%[[WEIGHT]], %arg0) {fused_activation_function = "NONE"} : (tensor<1x1x1x3xf32>, tensor<1x4x5x3xf32>) -> tensor<1x4x5x3xf32>
 
@@ -24,7 +24,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @sub_constant_rhs_spatial} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>) -> tensor<1x2x3x4xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x4xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[WEIGHT:.*]] = arith.constant {{.*}} : tensor<1x2x3x1xf32>
 // CHECK: "tfl.sub"(%arg0, %[[WEIGHT]]) {fused_activation_function = "NONE"} : (tensor<1x2x3x4xf32>, tensor<1x2x3x1xf32>) -> tensor<1x2x3x4xf32>
 
@@ -38,6 +38,6 @@ module {
   }
   "onnx.EntryPoint"() {func = @sub_constant_lhs_width} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>) -> tensor<1x4x5x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[WEIGHT:.*]] = arith.constant {{.*}} : tensor<1x1x5x1xf32>
 // CHECK: "tfl.sub"(%[[WEIGHT]], %arg0) {fused_activation_function = "NONE"} : (tensor<1x1x5x1xf32>, tensor<1x4x5x3xf32>) -> tensor<1x4x5x3xf32>

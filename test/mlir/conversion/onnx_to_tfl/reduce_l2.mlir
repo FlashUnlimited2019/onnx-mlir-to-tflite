@@ -34,7 +34,7 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.mul"(%arg0, %arg0) {{.*}} : (tensor<1x3x4x2xf32>, tensor<1x3x4x2xf32>) -> tensor<1x3x4x2xf32>
 // CHECK: "tfl.transpose"{{.*}} : (tensor<1x3x4x2xf32>, tensor<4xi32>) -> tensor<1x2x3x4xf32>
 // CHECK: "tfl.sum"{{.*}} {keep_dims = false} : (tensor<1x2x3x4xf32>, tensor<1xi32>) -> tensor<1x3x4xf32>

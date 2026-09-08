@@ -12,7 +12,7 @@ module {
   "onnx.EntryPoint"() {func = @unary_ops} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>) -> tensor<1x3x4x2xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x4x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.elu"(%arg0) : (tensor<1x3x4x2xf32>) -> tensor<1x3x4x2xf32>
 // CHECK: "tfl.floor"({{.*}}) : (tensor<1x3x4x2xf32>) -> tensor<1x3x4x2xf32>
 // CHECK: arith.constant dense<1.000000e+00> : tensor<f32>
@@ -39,7 +39,7 @@ module {
   "onnx.EntryPoint"() {func = @integer_coordinate_ops} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x3xi64>) -> (tensor<2x3xf32>, tensor<1x2x3xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x3xi64>{{( \{[^}]*\})?}}) -> (tensor<2x3xf32>{{( \{[^}]*\})?}}, tensor<1x2x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.less"(%arg0, {{.*}}) : (tensor<2x3xi64>, tensor<i64>) -> tensor<2x3xi1>
 // CHECK: "tfl.greater"(%arg0, {{.*}}) : (tensor<2x3xi64>, tensor<i64>) -> tensor<2x3xi1>
 // CHECK: "tfl.cast"
@@ -61,7 +61,7 @@ module {
   "onnx.EntryPoint"() {func = @depth_to_space_crd} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x8xf32>) -> tensor<1x4x6x2xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x8xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x6x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x2x3x8xf32>, tensor<3xi32>) -> tensor<6x2x4xf32>
 // CHECK: arith.constant dense<[0, 2, 1]> : tensor<3xi32>
 // CHECK: "tfl.transpose"{{.*}} : (tensor<6x2x4xf32>, tensor<3xi32>) -> tensor<6x4x2xf32>
@@ -79,6 +79,6 @@ module {
   "onnx.EntryPoint"() {func = @depth_to_space_dcr} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x8xf32>) -> tensor<1x4x6x2xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x8xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x6x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.depth_to_space"(%arg0) {block_size = 2 : i32} : (tensor<1x2x3x8xf32>) -> tensor<1x4x6x2xf32>
 // CHECK-NOT: onnx.

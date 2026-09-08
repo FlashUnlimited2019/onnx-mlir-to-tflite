@@ -595,6 +595,55 @@ int64_t ONNXToTFLLayoutAnalysis::applySupportedTypeEncodings() {
   }
 
   module.walk([&](func::FuncOp function) {
+    if (function->hasAttr("tf.entry_function")) {
+      // Internal permutations are not part of the non-rank-4 graph ABI.
+      // Bridge them with logical identity Transposes: layout-aware lowering
+      // materializes only the required physical permutation, while internal
+      // consumers keep their optimized encodings. Compare permutations, not
+      // shapes, because exchanging equal-sized axes still reorders values.
+      auto needsBoundaryConversion = [](Type type) {
+        auto tensor = dyn_cast<RankedTensorType>(type);
+        if (!tensor || tensor.getRank() == 4 || !tensor.getEncoding())
+          return false;
+        SmallVector<int64_t> layout =
+            getONNXToTFLPhysicalToLogicalLayout(tensor);
+        for (auto [axis, dimension] : llvm::enumerate(layout))
+          if (static_cast<int64_t>(axis) != dimension)
+            return true;
+        return false;
+      };
+      OpBuilder builder(function.getContext());
+      auto bridge = [&](Value value, RankedTensorType resultType) {
+        SmallVector<int64_t> identity(resultType.getRank());
+        std::iota(identity.begin(), identity.end(), 0);
+        return ONNXTransposeOp::create(builder, function.getLoc(), resultType,
+            value, builder.getI64ArrayAttr(identity));
+      };
+      Operation *terminator = function.getBody().front().getTerminator();
+      for (BlockArgument argument : function.getArguments()) {
+        if (!needsBoundaryConversion(argument.getType()))
+          continue;
+        auto internalType = cast<RankedTensorType>(argument.getType());
+        argument.setType(stripONNXToTFLLayoutEncoding(internalType));
+        builder.setInsertionPointToStart(&function.getBody().front());
+        auto converted = bridge(argument, internalType);
+        // Direct input-to-output aliases already have the public layout.
+        // Preserve the SSA alias as well as its signature tensor mapping.
+        argument.replaceUsesWithIf(converted.getResult(), [&](OpOperand &use) {
+          return use.getOwner() != converted.getOperation() &&
+                 use.getOwner() != terminator;
+        });
+      }
+      builder.setInsertionPoint(terminator);
+      for (OpOperand &operand : terminator->getOpOperands()) {
+        if (!needsBoundaryConversion(operand.get().getType()))
+          continue;
+        auto internalType = cast<RankedTensorType>(operand.get().getType());
+        operand.set(
+            bridge(operand.get(), stripONNXToTFLLayoutEncoding(internalType))
+                .getResult());
+      }
+    }
     SmallVector<Type> inputs;
     inputs.reserve(function.getNumArguments());
     for (BlockArgument argument : function.getArguments())

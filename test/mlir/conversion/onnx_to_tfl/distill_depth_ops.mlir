@@ -14,7 +14,7 @@ module {
   "onnx.EntryPoint"() {func = @resize_bilinear_align_corners} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x19x19x64xf32>) -> tensor<1x37x37x64xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x19x19x64xf32>{{( \{[^}]*\})?}}) -> (tensor<1x37x37x64xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<37> : tensor<2xi32>
 // CHECK: "tfl.resize_bilinear"(%arg0, {{.*}}) {align_corners = true, half_pixel_centers = false} : (tensor<1x19x19x64xf32>, tensor<2xi32>) -> tensor<1x37x37x64xf32>
 // CHECK-NOT: onnx.

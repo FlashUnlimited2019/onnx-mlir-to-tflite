@@ -44,6 +44,192 @@ Operation *getSingleUser(Value value) {
   return value.hasOneUse() ? *value.getUsers().begin() : nullptr;
 }
 
+// Move branch-local constant biases before a last-axis split, independently
+// of any head reshape or transpose that follows it. This also exposes a
+// preceding constant-weight projection to the downstream FC bias fusion.
+class MoveSplitBiasBeforeSplitPattern final
+    : public OpRewritePattern<ONNXSplitOp> {
+public:
+  MoveSplitBiasBeforeSplitPattern(MLIRContext *context)
+      : OpRewritePattern<ONNXSplitOp>(context, PatternBenefit(2)) {}
+
+  LogicalResult matchAndRewrite(
+      ONNXSplitOp op, PatternRewriter &rewriter) const override {
+    auto inputType = dyn_cast<RankedTensorType>(op.getInput().getType());
+    if (!inputType || !inputType.hasStaticShape() ||
+        !inputType.getElementType().isF32() || inputType.getRank() < 1 ||
+        normalizeAxis(op.getAxis(), inputType.getRank()) !=
+            inputType.getRank() - 1 ||
+        op->getNumResults() < 2)
+      return failure();
+
+    // Avoid expanding scalar branch biases into unbounded dense constants.
+    constexpr int64_t maxBiasElements = 1024 * 1024;
+    if (inputType.getShape().back() <= 0 ||
+        inputType.getShape().back() > maxBiasElements)
+      return failure();
+
+    SmallVector<ONNXAddOp> adds;
+    SmallVector<float> combined;
+    for (Value result : op.getOutputs()) {
+      auto type = dyn_cast<RankedTensorType>(result.getType());
+      auto add = dyn_cast_or_null<ONNXAddOp>(getSingleUser(result));
+      if (!type || !type.hasStaticShape() || !add ||
+          type.getRank() != inputType.getRank() ||
+          type.getElementType() != inputType.getElementType() ||
+          type.getShape().drop_back() != inputType.getShape().drop_back() ||
+          type.getShape().back() <= 0 || add.getResult().getType() != type)
+        return failure();
+      Value bias = add.getA() == result ? add.getB() : add.getA();
+      auto biasType = dyn_cast<RankedTensorType>(bias.getType());
+      int64_t width = type.getShape().back();
+      if (width >
+          inputType.getShape().back() - static_cast<int64_t>(combined.size()))
+        return failure();
+      if (!biasType || !biasType.hasStaticShape() ||
+          !biasType.getElementType().isF32() ||
+          biasType.getRank() > type.getRank() ||
+          (biasType.getNumElements() != 1 &&
+              biasType.getNumElements() != width))
+        return failure();
+      for (int64_t axis = 0; axis + 1 < biasType.getRank(); ++axis)
+        if (biasType.getShape()[axis] != 1)
+          return failure();
+      auto values = getConstantF32Values(bias);
+      if (failed(values))
+        return failure();
+      if (values->size() == 1)
+        combined.append(width, values->front());
+      else
+        combined.append(*values);
+      adds.push_back(add);
+    }
+    if (static_cast<int64_t>(combined.size()) != inputType.getShape().back())
+      return failure();
+
+    auto biasType = RankedTensorType::get(
+        {inputType.getShape().back()}, rewriter.getF32Type());
+    MultiDialectBuilder<OnnxBuilder> create(rewriter, op.getLoc());
+    Value bias =
+        create.onnx.constant(DenseElementsAttr::get<float>(biasType, combined));
+    Value input = ONNXAddOp::create(
+        rewriter, op.getLoc(), inputType, op.getInput(), bias);
+    rewriter.modifyOpInPlace(op, [&]() { op->setOperand(0, input); });
+    for (auto [index, add] : llvm::enumerate(adds))
+      rewriter.replaceOp(add, op.getOutputs()[index]);
+    return success();
+  }
+};
+
+template <typename BinaryOp>
+Value matchScalarBinary(Value value, float scalar) {
+  auto op = value.getDefiningOp<BinaryOp>();
+  if (!op || !value.hasOneUse())
+    return {};
+  for (unsigned index = 0; index < 2; ++index) {
+    auto constant = getDenseF32Constant(op->getOperand(1 - index));
+    Value data = op->getOperand(index);
+    auto type = dyn_cast<RankedTensorType>(data.getType());
+    if (succeeded(constant) && constant->getNumElements() == 1 && type &&
+        type.hasStaticShape() && type.getElementType().isF32() &&
+        type == value.getType() &&
+        constant->getType().getRank() <= type.getRank() &&
+        (*constant->template getValues<APFloat>().begin()).convertToFloat() ==
+            scalar)
+      return data;
+  }
+  return {};
+}
+
+bool matchCube(Value value, Value input) {
+  if (!value.hasOneUse() || value.getType() != input.getType())
+    return false;
+  if (auto power = value.getDefiningOp<ONNXPowOp>()) {
+    auto exponent = getDenseF32Constant(power.getY());
+    return power.getX() == input && succeeded(exponent) &&
+           exponent->getNumElements() == 1 &&
+           (*exponent->getValues<APFloat>().begin()).convertToFloat() == 3.0f;
+  }
+  auto product = value.getDefiningOp<ONNXMulOp>();
+  if (!product)
+    return false;
+  for (unsigned index = 0; index < 2; ++index) {
+    auto square = product->getOperand(1 - index).getDefiningOp<ONNXMulOp>();
+    if (product->getOperand(index) == input && square &&
+        square.getResult().hasOneUse() && square.getA() == input &&
+        square.getB() == input &&
+        square.getResult().getType() == input.getType())
+      return true;
+  }
+  return false;
+}
+
+bool matchTanhGeluFactor(Value factor, Value input) {
+  Value tanhValue = matchScalarBinary<ONNXAddOp>(factor, 1.0f);
+  auto tanh = tanhValue ? tanhValue.getDefiningOp<ONNXTanhOp>() : ONNXTanhOp();
+  if (!tanh || !tanhValue.hasOneUse() || tanhValue.getType() != input.getType())
+    return false;
+  Value sumValue = matchScalarBinary<ONNXMulOp>(tanh.getInput(), 0.797884583f);
+  auto sum = sumValue ? sumValue.getDefiningOp<ONNXAddOp>() : ONNXAddOp();
+  if (!sum || !sumValue.hasOneUse() || sumValue.getType() != input.getType())
+    return false;
+  for (unsigned index = 0; index < 2; ++index) {
+    Value cube =
+        matchScalarBinary<ONNXMulOp>(sum->getOperand(1 - index), 0.044715f);
+    if (sum->getOperand(index) == input && cube && matchCube(cube, input))
+      return true;
+  }
+  return false;
+}
+
+// Recognize both (0.5*x)*factor and 0.5*(x*factor) before the generic
+// optimizer absorbs the final scale into a following constant weight.
+// Preserve the specified tanh approximation; never approximate an erf GELU.
+class FuseTanhGeluPattern final : public OpRewritePattern<ONNXMulOp> {
+public:
+  FuseTanhGeluPattern(MLIRContext *context)
+      : OpRewritePattern<ONNXMulOp>(context, PatternBenefit(3)) {}
+
+  LogicalResult matchAndRewrite(
+      ONNXMulOp op, PatternRewriter &rewriter) const override {
+    auto type = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!type || !type.hasStaticShape() || !type.getElementType().isF32())
+      return failure();
+    Value input;
+    // The root may have multiple users: only internal expression values need
+    // to be single-use. Inspect the outer constant without imposing that
+    // restriction on the root.
+    for (unsigned index = 0; index < 2 && !input; ++index) {
+      auto half = getDenseF32Constant(op->getOperand(1 - index));
+      auto product = op->getOperand(index).getDefiningOp<ONNXMulOp>();
+      if (succeeded(half) && half->getNumElements() == 1 && product &&
+          half->getType().getRank() <= type.getRank() &&
+          (*half->getValues<APFloat>().begin()).convertToFloat() == 0.5f &&
+          product.getResult().hasOneUse() &&
+          product.getResult().getType() == type) {
+        for (unsigned side = 0; side < 2; ++side)
+          if (product->getOperand(side).getType() == type &&
+              matchTanhGeluFactor(
+                  product->getOperand(1 - side), product->getOperand(side)))
+            input = product->getOperand(side);
+      }
+      Value candidate =
+          matchScalarBinary<ONNXMulOp>(op->getOperand(index), 0.5f);
+      if (candidate && candidate.getType() == type &&
+          matchTanhGeluFactor(op->getOperand(1 - index), candidate))
+        input = candidate;
+    }
+    if (!input)
+      return failure();
+    OperationState state(op.getLoc(), ONNXGeluOp::getOperationName());
+    state.addOperands(input);
+    state.addTypes(type);
+    state.addAttribute("approximate", rewriter.getStringAttr("tanh"));
+    rewriter.replaceOp(op, rewriter.create(state)->getResults());
+    return success();
+  }
+};
+
 struct ProjectionBranch {
   ONNXAddOp biasAdd;
   ONNXMulOp scale;
@@ -472,15 +658,45 @@ public:
       return failure();
 
     SmallVector<Operation *> forwardTransposes;
+    SmallVector<Operation *> forwardOperations;
+    Operation *scale = nullptr;
+    unsigned scaleDataOperand = 0;
     Value source = softmax->getOperand(0);
     while (Operation *transpose = source.getDefiningOp()) {
-      if (transpose->getName().getStringRef() != "tfl.transpose")
+      StringRef name = transpose->getName().getStringRef();
+      if (name != "tfl.transpose" && (name != "tfl.mul" || scale))
         break;
       if (transpose->getNumOperands() != 2 || transpose->getNumResults() != 1 ||
           !transpose->getResult(0).hasOneUse())
         return failure();
-      forwardTransposes.push_back(transpose);
-      source = transpose->getOperand(0);
+      if (name == "tfl.mul") {
+        auto activation =
+            transpose->getAttrOfType<StringAttr>("fused_activation_function");
+        if (!activation || activation.getValue() != "NONE")
+          return failure();
+        bool matched = false;
+        for (unsigned index = 0; index < 2; ++index) {
+          auto constant = getDenseF32Constant(transpose->getOperand(1 - index));
+          auto dataType = dyn_cast<RankedTensorType>(
+              transpose->getOperand(index).getType());
+          if (succeeded(constant) && constant->getNumElements() == 1 &&
+              dataType && dataType.hasStaticShape() &&
+              dataType == transpose->getResult(0).getType() &&
+              constant->getType().getRank() <= dataType.getRank()) {
+            scaleDataOperand = index;
+            matched = true;
+            break;
+          }
+        }
+        if (!matched)
+          return failure();
+        scale = transpose;
+        source = scale->getOperand(scaleDataOperand);
+      } else {
+        forwardTransposes.push_back(transpose);
+        source = transpose->getOperand(0);
+      }
+      forwardOperations.push_back(transpose);
     }
     if (forwardTransposes.empty())
       return failure();
@@ -541,6 +757,17 @@ public:
         forwardPermutation->back() != sourceType.getRank() - 1)
       return failure();
 
+    // A scalar scale commutes with a permutation without moving it across
+    // either matrix multiplication or the normalization itself.
+    if (scale) {
+      SmallVector<Value> operands(scale->getOperands());
+      operands[scaleDataOperand] = source;
+      OperationState scaleState(scale->getLoc(), "tfl.mul");
+      scaleState.addOperands(operands);
+      scaleState.addTypes(sourceType);
+      scaleState.addAttributes(scale->getAttrs());
+      source = rewriter.create(scaleState)->getResult(0);
+    }
     OperationState state(op->getLoc(), "tfl.softmax");
     state.addOperands(source);
     state.addTypes(resultType);
@@ -550,8 +777,8 @@ public:
     for (Operation *transpose : llvm::drop_begin(trailingTransposes))
       rewriter.eraseOp(transpose);
     rewriter.eraseOp(softmax);
-    for (Operation *transpose : forwardTransposes)
-      rewriter.eraseOp(transpose);
+    for (Operation *operation : forwardOperations)
+      rewriter.eraseOp(operation);
     return success();
   }
 };
@@ -1123,7 +1350,8 @@ public:
 
 void populateONNXToTFLTransformerPreprocessingPatterns(
     RewritePatternSet &patterns) {
-  patterns.add<PackSplitProjectionPattern, PackSeparateProjectionPattern>(
+  patterns.add<PackSplitProjectionPattern, PackSeparateProjectionPattern,
+      MoveSplitBiasBeforeSplitPattern, FuseTanhGeluPattern>(
       patterns.getContext());
 }
 

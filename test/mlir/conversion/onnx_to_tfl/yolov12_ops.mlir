@@ -18,10 +18,9 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x4x6xf32>, %arg1: tensor<1x4x3x2xf32>) -> tensor<1x2x3x2xf32>
-// CHECK: arith.constant dense<2> : tensor<3xi32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x4x6xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x4x3x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x2xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<3> : tensor<i32>
-// CHECK: "tfl.split_v"(%arg0, {{.*}}, {{.*}}) {num_splits = 3 : i32} : (tensor<1x2x4x6xf32>, tensor<3xi32>, tensor<i32>) -> (tensor<1x2x4x2xf32>, tensor<1x2x4x2xf32>, tensor<1x2x4x2xf32>)
+// CHECK: "tfl.split"({{.*}}, %arg0) {num_splits = 3 : i32} : (tensor<i32>, tensor<1x2x4x6xf32>) -> (tensor<1x2x4x2xf32>, tensor<1x2x4x2xf32>, tensor<1x2x4x2xf32>)
 // CHECK: "tfl.batch_matmul"{{.*}} : (tensor<1x2x2x4xf32>, tensor<1x2x4x3xf32>) -> tensor<1x2x2x3xf32>
 // CHECK: "tfl.reduce_max"{{.*}} {keep_dims = true} : (tensor<1x2x2x3xf32>, tensor<1xi32>) -> tensor<1x2x2x1xf32>
 // CHECK: "tfl.exp"

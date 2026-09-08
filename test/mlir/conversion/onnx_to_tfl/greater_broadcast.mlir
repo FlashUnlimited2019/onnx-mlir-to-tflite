@@ -10,7 +10,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @greater_rank4_rank3} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>, %arg1: tensor<3x4x5xf32>) -> tensor<1x4x5x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<3x4x5xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<1x4x5x3xf32>, tensor<4xi32>) -> tensor<1x3x4x5xf32>
 // CHECK: "tfl.greater"({{.*}}, %arg1) : (tensor<1x3x4x5xf32>, tensor<3x4x5xf32>) -> tensor<1x3x4x5xi1>
 // CHECK: "tfl.cast"({{.*}}) : (tensor<1x3x4x5xi1>) -> tensor<1x3x4x5xf32>
@@ -26,7 +26,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @greater_rank4_rank2} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5x3xf32>, %arg1: tensor<4x5xf32>) -> tensor<2x4x5x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<4x5xf32>{{( \{[^}]*\})?}}) -> (tensor<2x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<2x4x5x3xf32>, tensor<4xi32>) -> tensor<2x3x4x5xf32>
 // CHECK: "tfl.greater"({{.*}}, %arg1) : (tensor<2x3x4x5xf32>, tensor<4x5xf32>) -> tensor<2x3x4x5xi1>
 // CHECK: "tfl.cast"({{.*}}) : (tensor<2x3x4x5xi1>) -> tensor<2x3x4x5xf32>
@@ -42,7 +42,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @greater_rank3_broadcast} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x3x4xf32>, %arg1: tensor<1x4xf32>) -> tensor<2x3x4xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x3x4xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x4xf32>{{( \{[^}]*\})?}}) -> (tensor<2x3x4xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.greater"(%arg0, %arg1) : (tensor<2x3x4xf32>, tensor<1x4xf32>) -> tensor<2x3x4xi1>
 // CHECK: "tfl.cast"({{.*}}) : (tensor<2x3x4xi1>) -> tensor<2x3x4xf32>
 
@@ -55,7 +55,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @round_rank4} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>) -> tensor<1x4x5x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.round"(%arg0) : (tensor<1x4x5x3xf32>) -> tensor<1x4x5x3xf32>
 
 // -----
@@ -68,7 +68,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @greater_rank5_broadcast} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x3x2x3x4xf32>, %arg1: tensor<1x3x2x1x1xf32>) -> tensor<2x3x2x3x4xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x3x2x3x4xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x3x2x1x1xf32>{{( \{[^}]*\})?}}) -> (tensor<2x3x2x3x4xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<2x3x2x3x4xf32>, tensor<1xi32>) -> tensor<144xf32>
 // CHECK: "tfl.broadcast_to"(%arg1, {{.*}}) : (tensor<1x3x2x1x1xf32>, tensor<5xi32>) -> tensor<2x3x2x3x4xf32>
 // CHECK: "tfl.reshape"({{.*}}) : (tensor<2x3x2x3x4xf32>, tensor<1xi32>) -> tensor<144xf32>

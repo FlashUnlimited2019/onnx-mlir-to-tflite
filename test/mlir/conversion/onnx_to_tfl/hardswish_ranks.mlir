@@ -9,7 +9,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @hardswish_rank2} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x12xf32>) -> tensor<2x12xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x12xf32>{{( \{[^}]*\})?}}) -> (tensor<2x12xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.hard_swish"(%arg0) : (tensor<2x12xf32>) -> tensor<2x12xf32>
 
 // -----
@@ -21,7 +21,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @hardswish_rank3} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x6xf32>) -> tensor<2x4x6xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x6xf32>{{( \{[^}]*\})?}}) -> (tensor<2x4x6xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.hard_swish"(%arg0) : (tensor<2x4x6xf32>) -> tensor<2x4x6xf32>
 
 // -----
@@ -33,5 +33,5 @@ module {
   }
   "onnx.EntryPoint"() {func = @hardswish_rank5} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x2x4x4xf32>) -> tensor<1x3x2x4x4xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x2x4x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x2x4x4xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.hard_swish"(%arg0) : (tensor<1x3x2x4x4xf32>) -> tensor<1x3x2x4x4xf32>

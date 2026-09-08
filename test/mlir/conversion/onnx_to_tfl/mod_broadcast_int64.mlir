@@ -9,7 +9,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @mod_f32_rank4_rank2} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x5x6x4xf32>, %arg1: tensor<5x6xf32>) -> tensor<1x5x6x4xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x5x6x4xf32>{{( \{[^}]*\})?}}, %arg1: tensor<5x6xf32>{{( \{[^}]*\})?}}) -> (tensor<1x5x6x4xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<1x5x6x4xf32>, tensor<4xi32>) -> tensor<1x4x5x6xf32>
 // CHECK: "tfl.floor_mod"({{.*}}, %arg1) : (tensor<1x4x5x6xf32>, tensor<5x6xf32>) -> tensor<1x4x5x6xf32>
 // CHECK: "tfl.transpose"({{.*}}) : (tensor<1x4x5x6xf32>, tensor<4xi32>) -> tensor<1x5x6x4xf32>
@@ -23,7 +23,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @mod_f32_rank5_broadcast} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4x5xf32>, %arg1: tensor<3x4x5xf32>) -> tensor<1x2x3x4x5xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4x5xf32>{{( \{[^}]*\})?}}, %arg1: tensor<3x4x5xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x4x5xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.broadcast_to"(%arg1, {{.*}}) : (tensor<3x4x5xf32>, tensor<5xi32>) -> tensor<1x2x3x4x5xf32>
 // CHECK: "tfl.floor_mod"({{.*}}, {{.*}}) : (tensor<120xf32>, tensor<120xf32>) -> tensor<120xf32>
 // CHECK: "tfl.reshape"({{.*}}) : (tensor<120xf32>, tensor<5xi32>) -> tensor<1x2x3x4x5xf32>
@@ -40,7 +40,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @mod_i64_floor} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<4x7xf32>) -> tensor<4x7xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<4x7xf32>{{( \{[^}]*\})?}}) -> (tensor<4x7xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.cast"(%arg0) : (tensor<4x7xf32>) -> tensor<4x7xi64>
 // CHECK: "tfl.floor_mod"({{.*}}, {{.*}}) : (tensor<4x7xi64>, tensor<7xi64>) -> tensor<4x7xi64>
 // CHECK: "tfl.cast"({{.*}}) : (tensor<4x7xi64>) -> tensor<4x7xf32>
@@ -57,7 +57,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @mod_i64_fmod_rank4} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5x3xf32>) -> tensor<2x4x5x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5x3xf32>{{( \{[^}]*\})?}}) -> (tensor<2x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<2x4x5x3xf32>, tensor<4xi32>) -> tensor<2x3x4x5xf32>
 // CHECK: "tfl.cast"({{.*}}) : (tensor<2x3x4x5xf32>) -> tensor<2x3x4x5xi64>
 // CHECK: "tfl.floor_mod"({{.*}}, {{.*}}) : (tensor<2x3x4x5xi64>, tensor<3x4x5xi64>) -> tensor<2x3x4x5xi64>

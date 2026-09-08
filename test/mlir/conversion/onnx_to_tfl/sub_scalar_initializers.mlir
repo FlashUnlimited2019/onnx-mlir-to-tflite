@@ -11,7 +11,7 @@ module {
   "onnx.EntryPoint"() {func = @sub_scalar_lhs_rank2} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x16xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x16xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[SCALAR:.*]] = arith.constant {{.*}} : tensor<f32>
 // CHECK: "tfl.sub"(%[[SCALAR]], %arg0) {fused_activation_function = "NONE"} : (tensor<f32>, tensor<1x16xf32>) -> tensor<1x16xf32>
 // CHECK-NOT: onnx.
@@ -27,7 +27,7 @@ module {
   "onnx.EntryPoint"() {func = @sub_scalar_rhs_rank1} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<16xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<16xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[SCALAR:.*]] = arith.constant {{.*}} : tensor<f32>
 // CHECK: "tfl.sub"(%arg0, %[[SCALAR]]) {fused_activation_function = "NONE"} : (tensor<16xf32>, tensor<f32>) -> tensor<16xf32>
 // CHECK-NOT: onnx.
@@ -43,7 +43,7 @@ module {
   "onnx.EntryPoint"() {func = @sub_scalar_lhs_rank4} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[SCALAR:.*]] = arith.constant {{.*}} : tensor<f32>
 // CHECK: "tfl.sub"(%[[SCALAR]], %arg0) {fused_activation_function = "NONE"} : (tensor<f32>, tensor<1x4x5x3xf32>) -> tensor<1x4x5x3xf32>
 // CHECK-NOT: onnx.

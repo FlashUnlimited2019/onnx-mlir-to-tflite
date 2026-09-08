@@ -14,7 +14,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @reduce_rank5_to_rank4} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4x5xf32>) -> tensor<1x3x4x2xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4x5xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x4x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.mean"({{.*}}) {keep_dims = false} : (tensor<1x2x3x4x5xf32>, tensor<1xi32>) -> tensor<1x2x3x4xf32>
 // CHECK: "tfl.transpose"({{.*}}) : (tensor<1x2x3x4xf32>, tensor<4xi32>) -> tensor<1x3x4x2xf32>
 
@@ -28,7 +28,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @reduce_rank4_to_rank3} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>) -> tensor<1x2x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"({{.*}}) : (tensor<1x3x4x2xf32>, tensor<4xi32>) -> tensor<1x2x3x4xf32>
 // CHECK: "tfl.mean"({{.*}}) {keep_dims = false} : (tensor<1x2x3x4xf32>, tensor<1xi32>) -> tensor<1x2x3xf32>
 
@@ -42,7 +42,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @gather_elements_rank3} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3xf32>) -> tensor<1x2x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant {{.*}} : tensor<1x2x3x3xi32>
 // CHECK: "tfl.gather_nd"(%arg0, {{.*}}) : (tensor<1x2x3xf32>, tensor<1x2x3x3xi32>) -> tensor<1x2x3xf32>
 
@@ -56,7 +56,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @gather_elements_rank4} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x2xf32>) -> tensor<1x2x3x2xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"({{.*}}) : (tensor<1x2x3x2xf32>, tensor<4xi32>) -> tensor<1x2x2x3xf32>
 // CHECK: "tfl.gather_nd"({{.*}}) : (tensor<1x2x2x3xf32>, tensor<1x2x2x3x4xi32>) -> tensor<1x2x2x3xf32>
 // CHECK: "tfl.transpose"({{.*}}) : (tensor<1x2x2x3xf32>, tensor<4xi32>) -> tensor<1x2x3x2xf32>
@@ -70,5 +70,5 @@ module {
   }
   "onnx.EntryPoint"() {func = @matmul_rank3_output} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5xf32>, %arg1: tensor<5x3xf32>) -> tensor<2x4x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5xf32>{{( \{[^}]*\})?}}, %arg1: tensor<5x3xf32>{{( \{[^}]*\})?}}) -> (tensor<2x4x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.batch_matmul"(%arg0, %arg1) {adj_x = false, adj_y = false} : (tensor<2x4x5xf32>, tensor<5x3xf32>) -> tensor<2x4x3xf32>

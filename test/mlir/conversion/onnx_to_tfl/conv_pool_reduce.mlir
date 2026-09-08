@@ -11,7 +11,7 @@ module {
   "onnx.EntryPoint"() {func = @conv_graph} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x8x9x3xf32>, %arg1: tensor<4x3x5x3xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x8x9x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<4x3x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK-DAG: arith.constant dense<{{.*}}1, 1{{.*}}2, 2{{.*}}> : tensor<4x2xi32>
 // CHECK-DAG: arith.constant dense<0.000000e+00> : tensor<4xf32>
 // CHECK: "tfl.pad"(%arg0, {{.*}}) : (tensor<1x8x9x3xf32>, tensor<4x2xi32>) -> tensor<1x10x13x3xf32>
@@ -32,7 +32,7 @@ module {
   "onnx.EntryPoint"() {func = @pool_graph} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x8x9x3xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x8x9x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.padv2"(%arg0, {{.*}}) : (tensor<1x8x9x3xf32>, tensor<4x2xi32>, tensor<f32>) -> tensor<1x10x11x3xf32>
 // CHECK: "tfl.max_pool_2d"
 // CHECK-SAME: filter_height = 3 : i32
@@ -51,7 +51,7 @@ module {
   "onnx.EntryPoint"() {func = @mean_graph} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<[1, 2]> : tensor<2xi32>
 // CHECK: "tfl.mean"
 // CHECK-SAME: keep_dims = true
@@ -68,7 +68,7 @@ module {
   "onnx.EntryPoint"() {func = @broadcast_graph} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>, %arg1: tensor<3x1x1xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<3x1x1xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<[1, 1, 3]> : tensor<3xi32>
 // CHECK: "tfl.reshape"(%arg1, {{.*}}) : (tensor<3x1x1xf32>, tensor<3xi32>) -> tensor<1x1x3xf32>
 // CHECK: "tfl.mul"

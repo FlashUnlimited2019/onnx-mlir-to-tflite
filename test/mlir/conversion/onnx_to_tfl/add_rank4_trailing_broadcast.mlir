@@ -12,7 +12,7 @@ module {
   "onnx.EntryPoint"() {func = @add_rank4_rank1} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>, %arg1: tensor<5xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<5xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg1, {{.*}}) : (tensor<5xf32>, tensor<3xi32>) -> tensor<1x5x1xf32>
 // CHECK: "tfl.add"(%arg0, {{.*}}) {fused_activation_function = "NONE"} : (tensor<1x4x5x3xf32>, tensor<1x5x1xf32>) -> tensor<1x4x5x3xf32>
 // CHECK-NOT: onnx.
@@ -29,7 +29,7 @@ module {
   "onnx.EntryPoint"() {func = @add_rank2_rank4} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<4x5xf32>, %arg1: tensor<1x4x5x3xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<4x5xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<4x5xf32>, tensor<3xi32>) -> tensor<4x5x1xf32>
 // CHECK: "tfl.add"({{.*}}, %arg1) {fused_activation_function = "NONE"} : (tensor<4x5x1xf32>, tensor<1x4x5x3xf32>) -> tensor<1x4x5x3xf32>
 // CHECK-NOT: onnx.
@@ -46,7 +46,7 @@ module {
   "onnx.EntryPoint"() {func = @add_rank4_rank3} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5x3xf32>, %arg1: tensor<3x4x5xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<3x4x5xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"(%arg1, {{.*}}) : (tensor<3x4x5xf32>, tensor<3xi32>) -> tensor<4x5x3xf32>
 // CHECK: "tfl.add"(%arg0, {{.*}}) {fused_activation_function = "NONE"} : (tensor<2x4x5x3xf32>, tensor<4x5x3xf32>) -> tensor<2x4x5x3xf32>
 // CHECK-NOT: onnx.

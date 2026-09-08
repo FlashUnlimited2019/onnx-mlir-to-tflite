@@ -15,7 +15,7 @@ module {
   "onnx.EntryPoint"() {func = @collapse_rank6_expand} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>) -> tensor<1x4x5x2x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x5x2x3xf32>{{( \{[^}]*\})?}})
 // CHECK-NOT: tensor<1x4x1x1x2x3xf32>
 // CHECK-NOT: tensor<1x4x1x5x2x3xf32>
 // CHECK: "tfl.reshape"{{.*}} -> tensor<1x4x1x2x3xf32>
@@ -53,7 +53,7 @@ module {
   "onnx.EntryPoint"() {func = @lower_convex_upsample} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x36xf32>, %arg1: tensor<1x2x3x2xf32>) -> tensor<1x4x6x2xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x36xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x2x3x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x6x2xf32>{{( \{[^}]*\})?}})
 // CHECK-NOT: tensor<1x1x9x2x2x2x3xf32>
 // CHECK-NOT: tensor<1x2x9x2x2x2x3xf32>
 // CHECK: "tfl.softmax"

@@ -10,7 +10,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @equal_rank4_rank3} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5x3xf32>, %arg1: tensor<3x4x5xf32>) -> tensor<2x4x5x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<3x4x5xf32>{{( \{[^}]*\})?}}) -> (tensor<2x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<2x4x5x3xf32>, tensor<4xi32>) -> tensor<2x3x4x5xf32>
 // CHECK: "tfl.equal"({{.*}}, %arg1) : (tensor<2x3x4x5xf32>, tensor<3x4x5xf32>) -> tensor<2x3x4x5xi1>
 // CHECK: "tfl.cast"({{.*}}) : (tensor<2x3x4x5xi1>) -> tensor<2x3x4x5xf32>
@@ -26,7 +26,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @equal_rank5_broadcast} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x3x2x4x5xf32>, %arg1: tensor<3x4x5x2xf32>) -> tensor<2x3x2x4x5xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x3x2x4x5xf32>{{( \{[^}]*\})?}}, %arg1: tensor<3x4x5x2xf32>{{( \{[^}]*\})?}}) -> (tensor<2x3x2x4x5xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"(%arg1, {{.*}}) : (tensor<3x4x5x2xf32>, tensor<4xi32>) -> tensor<3x2x4x5xf32>
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<2x3x2x4x5xf32>, tensor<1xi32>) -> tensor<240xf32>
 // CHECK: "tfl.broadcast_to"({{.*}}, {{.*}}) : (tensor<3x2x4x5xf32>, tensor<5xi32>) -> tensor<2x3x2x4x5xf32>
@@ -43,7 +43,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @sign_rank4} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>) -> tensor<1x4x5x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.sign"(%arg0) : (tensor<1x4x5x3xf32>) -> tensor<1x4x5x3xf32>
 
 // -----
@@ -55,7 +55,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @fmod_rank5} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4x5xf32>, %arg1: tensor<1x2x3x4x5xf32>) -> tensor<1x2x3x4x5xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4x5xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x2x3x4x5xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x4x5xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x2x3x4x5xf32>, tensor<1xi32>) -> tensor<120xf32>
 // CHECK: "tfl.reshape"(%arg1, {{.*}}) : (tensor<1x2x3x4x5xf32>, tensor<1xi32>) -> tensor<120xf32>
 // CHECK: "tfl.floor_mod"({{.*}}, {{.*}}) : (tensor<120xf32>, tensor<120xf32>) -> tensor<120xf32>

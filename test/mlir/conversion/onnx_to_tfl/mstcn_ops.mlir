@@ -10,7 +10,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @squeeze_rank4} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x1x64xf32>) -> tensor<1x64xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x1x64xf32>{{( \{[^}]*\})?}}) -> (tensor<1x64xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<[0, 3, 1, 2]> : tensor<4xi32>
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<1x1x1x64xf32>, tensor<4xi32>) -> tensor<1x64x1x1xf32>
 // CHECK: "tfl.reshape"({{.*}}) : (tensor<1x64x1x1xf32>, tensor<2xi32>) -> tensor<1x64xf32>
@@ -25,7 +25,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @gather_scalar} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3xf32>) -> tensor<1xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<2> : tensor<i32>
 // CHECK: "tfl.gather"(%arg0, {{.*}}) {axis = 1 : i32, batch_dims = 0 : i32} : (tensor<1x3xf32>, tensor<i32>) -> tensor<1xf32>
 
@@ -40,7 +40,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @clip_scalar_bounds} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x8x2xf32>) -> tensor<1x1x8x2xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x8x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x1x8x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.maximum"(%arg0, {{.*}}) : (tensor<1x1x8x2xf32>, tensor<f32>) -> tensor<1x1x8x2xf32>
 // CHECK: "tfl.minimum"({{.*}}) : (tensor<1x1x8x2xf32>, tensor<f32>) -> tensor<1x1x8x2xf32>
 
@@ -54,7 +54,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @dilated_temporal_conv} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x16x4xf32>, %arg1: tensor<6x1x3x4xf32>) -> tensor<1x1x16x6xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x16x4xf32>{{( \{[^}]*\})?}}, %arg1: tensor<6x1x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x1x16x6xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.pad"(%arg0, {{.*}}) : (tensor<1x1x16x4xf32>, tensor<4x2xi32>) -> tensor<1x1x20x4xf32>
 // CHECK: "tfl.conv_2d"({{.*}}) {dilation_h_factor = 1 : i32, dilation_w_factor = 2 : i32, fused_activation_function = "NONE", padding = "VALID", stride_h = 1 : i32, stride_w = 1 : i32}
 // CHECK-NOT: "tfl.space_to_batch_nd"
@@ -69,7 +69,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @reduce_sum_v11} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x64xf32>) -> tensor<1xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x64xf32>{{( \{[^}]*\})?}}) -> (tensor<1xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<1> : tensor<1xi32>
 // CHECK: "tfl.sum"(%arg0, {{.*}}) {keep_dims = false} : (tensor<1x64xf32>, tensor<1xi32>) -> tensor<1xf32>
 
@@ -84,7 +84,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @layer_norm_rank2} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3xf32>) -> tensor<1x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.mean"(%arg0, {{.*}}) {keep_dims = true} : (tensor<1x3xf32>, tensor<1xi32>) -> tensor<1x1xf32>
 // CHECK: "tfl.sub"
 // CHECK: "tfl.mul"
@@ -105,7 +105,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @layer_norm_rank3} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x3xf32>) -> tensor<1x4x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x3xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<2> : tensor<1xi32>
 // CHECK: "tfl.mean"(%arg0, {{.*}}) {keep_dims = true} : (tensor<1x4x3xf32>, tensor<1xi32>) -> tensor<1x4x1xf32>
 // CHECK: "tfl.sub"
@@ -127,7 +127,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @rms_layer_norm_rank3} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x3xf32>) -> tensor<1x4x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x3xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<2> : tensor<1xi32>
 // CHECK: "tfl.mul"(%arg0, %arg0) {fused_activation_function = "NONE"} : (tensor<1x4x3xf32>, tensor<1x4x3xf32>) -> tensor<1x4x3xf32>
 // CHECK: "tfl.mean"({{.*}}) {keep_dims = true} : (tensor<1x4x3xf32>, tensor<1xi32>) -> tensor<1x4x1xf32>
@@ -146,7 +146,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @neg_rank4} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>) -> tensor<1x3x4x2xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x4x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x4x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.neg"(%arg0) : (tensor<1x3x4x2xf32>) -> tensor<1x3x4x2xf32>
 
 // -----
@@ -158,7 +158,7 @@ module {
   }
   "onnx.EntryPoint"() {func = @average_pool_include_pad} : () -> ()
 }
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x16x2xf32>) -> tensor<1x1x16x2xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x16x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x1x16x2xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<{{\[}}[0, 0], [0, 0], [5, 5], [0, 0]{{\]}}> : tensor<4x2xi32>
 // CHECK: "tfl.pad"(%arg0, {{.*}}) : (tensor<1x1x16x2xf32>, tensor<4x2xi32>) -> tensor<1x1x26x2xf32>
 // CHECK: "tfl.average_pool_2d"({{.*}}) {filter_height = 1 : i32, filter_width = 11 : i32, fused_activation_function = "NONE", padding = "VALID", stride_h = 1 : i32, stride_w = 1 : i32}

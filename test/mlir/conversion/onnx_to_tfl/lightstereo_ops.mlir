@@ -14,7 +14,7 @@ module {
   "onnx.EntryPoint"() {func = @scatter_nd_rank4} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x2xf32>, %arg1: tensor<1x2x3x1xf32>) -> tensor<1x2x3x2xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x2xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x2x3x1xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x2xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<{{.*}}> : tensor<1x1x2x3x4xi32>
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<1x2x3x2xf32>, tensor<4xi32>) -> tensor<1x2x2x3xf32>
 // CHECK: "tfl.transpose"(%arg1, {{.*}}) : (tensor<1x2x3x1xf32>, tensor<4xi32>) -> tensor<1x1x2x3xf32>
@@ -38,7 +38,7 @@ module {
   "onnx.EntryPoint"() {func = @gather_rank5_to_rank6} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x3x2x5xf32>) -> tensor<1x1x3x2x2x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x3x2x5xf32>{{( \{[^}]*\})?}}) -> (tensor<1x1x3x2x2x3xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<{{.*}}> : tensor<2x3xi32>
 // CHECK: "tfl.gather"(%arg0, {{.*}}) {axis = 4 : i32, batch_dims = 0 : i32} : (tensor<1x1x3x2x5xf32>, tensor<2x3xi32>) -> tensor<1x1x3x2x2x3xf32>
 // CHECK-NOT: onnx.

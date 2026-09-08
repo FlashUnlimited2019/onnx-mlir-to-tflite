@@ -2,7 +2,7 @@
 
 # Compiler Optimizations
 
-The ONNX-to-TFLite pipeline applies several exact, static graph
+The ONNX-to-TFLite pipeline applies several semantics-preserving static graph
 transformations in addition to ordinary operator legalization. Their primary
 goals are to reduce unnecessary layout conversions, keep matrix operations at
 backend-friendly ranks, and replace expensive general tensor updates with
@@ -82,6 +82,32 @@ Both forms require a static rank-3 FP32 input, exactly three compatible
 branches, consistent head width and batch/sequence dimensions, and the
 expected single-use projection chains.
 
+### Split bias placement
+
+Constant biases following a last-axis split can be concatenated at compile
+time and applied once before the split. This rule is independent of subsequent
+head reshapes or permutations and supports unequal split widths, scalar biases,
+and channel vectors with leading singleton dimensions. Each split result must
+have only its bias addition as a user; biases that vary along other dimensions
+are left unchanged. Dense bias materialization is bounded to avoid excessive
+compile-time memory use.
+
+The resulting `MatMul -> Add -> Split` form exposes projection bias fusion
+and compatible preceding affine transforms to the optional TFL optimizer.
+
+### Tanh-GELU recognition
+
+Expanded tanh-GELU expressions are recognized before a generic optimizer can
+absorb their final scale into downstream weights. The matcher handles both
+`(0.5 * x) * factor` and `0.5 * (x * factor)`, commuted operands, and cubic
+terms expressed with `Pow` or repeated multiplication. Constants, intermediate
+shapes, broadcasting, and internal single-use requirements are checked.
+
+The replacement preserves the existing tanh approximation. It does not replace
+exact erf-GELU with an approximation or accept nearby coefficients. Fused and
+expanded floating-point kernels need not be bitwise identical, so numerical
+regression uses explicit error tolerances.
+
 ### Static sequence canonicalization
 
 A statically shaped `SplitToSequence -> SequenceAt` chain with constant split
@@ -150,6 +176,13 @@ squeeze, and unsqueeze operations remain zero-copy whenever the inferred input
 and output layouts agree. A logical transpose whose effect is already carried
 by the type encoding is removed. Operations that require a fixed physical
 layout receive explicit boundary conversions only where needed.
+
+Non-rank-4 graph inputs and outputs retain the logical ONNX axis order in
+both modes. Experimental layouts remain internal: boundary conversions are
+materialized when a non-identity permutation reaches an entry argument or
+returned value. This check uses axis permutations, not just tensor shapes,
+so equal-sized axes cannot hide an unintended data reordering. Existing
+rank-4 boundary layout policies are unchanged.
 
 ### Diagnostics and selection
 
@@ -228,6 +261,14 @@ Both transformations validate matrix dimensions, result shapes, permutation
 composition, integer bounds, and broadcasting behavior before changing the
 graph.
 
+### Equal-split selection
+
+Static splits with equal, positive output widths use the TFL `Split` builtin.
+Unequal or empty partitions retain `SplitV`. Axis mapping follows the selected
+physical layout. This allows backends supporting equal splits to retain larger
+accelerated subgraphs without requiring variable-split support; performance
+still depends on the runtime and target hardware.
+
 ## TFL structural rewrites
 
 After full ONNX legalization, targeted rewrites simplify structures that are
@@ -235,7 +276,7 @@ clearer in TFL form:
 
 | Pattern | Transformation | Required proof |
 | --- | --- | --- |
-| Softmax layout round trip | `Transpose* -> Softmax -> Transpose*` becomes `Softmax` | Composed permutations are inverse and the normalized final axis is unchanged |
+| Softmax layout round trip | Eliminate inverse transpose chains around `Softmax`, including one intervening scalar `Mul` | Composed permutations are inverse, the normalized final axis is unchanged, and any scale has one FP32 element without fused activation |
 | GELU layout round trip | `Transpose -> GELU -> inverse Transpose` becomes `GELU` | Static FP32 types, exact inverse permutations, and matching shapes |
 | Attention head-layout chain | Multiple rank-4/rank-3 transpose and reshape views become one direct transpose | Exact head, sequence, width, flattened-batch shapes and composed permutations |
 | Broadcast add motion | A constant broadcast `Add` is moved before a transpose | The constant can be transposed at compile time and broadcast shapes remain valid |
@@ -246,9 +287,11 @@ static tensors. Optional scalar scaling is retained on the unbroadcast source.
 
 ## Safety and fallback behavior
 
-The optimization rules are exact structural rewrites; they do not use
-approximate algebra, relaxed floating-point reassociation, or profile-guided
-assumptions. Depending on the pattern, matching requires:
+Layout and indexing rewrites preserve element mappings. Arithmetic recognition
+preserves the specified operator formula and approximation mode; it is not a
+promise of bitwise equality between different floating-point kernels. No rule
+depends on model names or profile-guided assumptions. Depending on the pattern,
+matching requires:
 
 - static ranked tensors and exact element types;
 - constant permutations, shapes, axes, or indices;
@@ -270,6 +313,9 @@ Regression coverage includes positive and negative structural matches,
 batch-rank reduction with and without broadcasting, layout diagnostics,
 layout-aware axis handling, static update recognition and fallback, complete
 MLIR legalization, FlatBuffer round trips, and end-to-end numerical checks.
+`test/e2e/run_transformer_rewrites.py` additionally checks split/bias and GELU
+forms across ranks 1–5, both layouts, and both settings of the optional TFL
+optimizer. Run it with `--help` for converter and work-directory options.
 
 See [Convert an ONNX model](convert-model.md) for the complete driver option
 reference and [Architecture](architecture.md) for the compiler and toolchain

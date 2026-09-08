@@ -11,7 +11,7 @@ module {
   "onnx.EntryPoint"() {func = @tile_rank6} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x6x1x4x4xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x6x1x4x4xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x1x6x1x4x4xf32>, tensor<5xi32>) -> tensor<1x6x1x4x4xf32>
 // CHECK: "tfl.tile"{{.*}} : (tensor<1x6x1x4x4xf32>, tensor<5xi32>) -> tensor<4x6x2500x4x4xf32>
 // CHECK: "tfl.reshape"{{.*}} : (tensor<4x6x2500x4x4xf32>, tensor<6xi32>) -> tensor<4x1x6x2500x4x4xf32>
@@ -28,7 +28,7 @@ module {
   "onnx.EntryPoint"() {func = @scatter_nd_rank6_indices} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x1x1x1xf32>, %arg1: tensor<1x1x1x1x1xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x1x1x1x1xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x1x1x1x1xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<0> : tensor<1x5xi32>
 // CHECK: %[[UPDATES:.*]] = "tfl.reshape"(%arg1, {{.*}}) : (tensor<1x1x1x1x1xf32>, tensor<1xi32>) -> tensor<1xf32>
 // CHECK: "tfl.gather_nd"(%arg0, {{.*}}) : (tensor<1x1x1x1x1xf32>, tensor<1x5xi32>) -> tensor<1xf32>
@@ -46,7 +46,7 @@ module {
   "onnx.EntryPoint"() {func = @gather_singleton_rank6} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x2500x8x1x4x2xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x2500x8x1x4x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<2x2500x8x1x4x2xf32>, tensor<5xi32>) -> tensor<2x2500x8x4x2xf32>
 // CHECK-NOT: "tfl.gather"
 // CHECK-NOT: onnx.
@@ -61,7 +61,7 @@ module {
   "onnx.EntryPoint"() {func = @transpose_rank7} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2500x8x2x1x4x2xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2500x8x2x1x4x2xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[REDUCED:.*]] = "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x2500x8x2x1x4x2xf32>, tensor<5xi32>) -> tensor<2500x8x2x4x2xf32>
 // CHECK: "tfl.transpose"(%[[REDUCED]], {{.*}}) : (tensor<2500x8x2x4x2xf32>, tensor<5xi32>) -> tensor<2x2500x8x4x2xf32>
 // CHECK-NOT: onnx.
@@ -76,7 +76,7 @@ module {
   "onnx.EntryPoint"() {func = @add_rank7} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<6x2500x1x1x1x4x2xf32>, %arg1: tensor<6x2500x8x1x2x4x2xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<6x2500x1x1x1x4x2xf32>{{( \{[^}]*\})?}}, %arg1: tensor<6x2500x8x1x2x4x2xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[LHS:.*]] = "tfl.reshape"(%arg0, {{.*}}) : (tensor<6x2500x1x1x1x4x2xf32>, tensor<3xi32>) -> tensor<15000x1x8xf32>
 // CHECK: %[[RHS:.*]] = "tfl.reshape"(%arg1, {{.*}}) : (tensor<6x2500x8x1x2x4x2xf32>, tensor<3xi32>) -> tensor<15000x16x8xf32>
 // CHECK: "tfl.add"(%[[LHS]], %[[RHS]]) {{.*}} : (tensor<15000x1x8xf32>, tensor<15000x16x8xf32>) -> tensor<15000x16x8xf32>
@@ -95,7 +95,7 @@ module {
   "onnx.EntryPoint"() {func = @transpose_bool} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<6x1x2500xf32>, %arg1: tensor<6x1x2500xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<6x1x2500xf32>{{( \{[^}]*\})?}}, %arg1: tensor<6x1x2500xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[COND:.*]] = "tfl.less"(%arg0, %arg1) : (tensor<6x1x2500xf32>, tensor<6x1x2500xf32>) -> tensor<6x1x2500xi1>
 // CHECK: %[[TRANSPOSED:.*]] = "tfl.transpose"(%[[COND]], {{.*}}) : (tensor<6x1x2500xi1>, tensor<3xi32>) -> tensor<1x2500x6xi1>
 // CHECK: "tfl.cast"(%[[TRANSPOSED]]) : (tensor<1x2500x6xi1>) -> tensor<1x2500x6xi64>

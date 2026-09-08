@@ -18,6 +18,28 @@ The output directory is created when necessary. The driver publishes the
 output only after MLIR verification, TFLite identifier validation, and a
 FlatBuffer-to-MLIR round trip succeed.
 
+## Named inference signature
+
+Newly converted models include a `serving_default` TFLite signature by default,
+in both layout modes and with or without TFL optimization. Signature input and
+output names come from the ONNX graph. When converting MLIR without ONNX name
+attributes, the fallback names are `input0`, `input1`, ... and `output0`,
+`output1`, ... .
+
+```python
+import tensorflow as tf
+
+interpreter = tf.lite.Interpreter(model_path="model.tflite")
+print(interpreter.get_signature_list())
+run = interpreter.get_signature_runner("serving_default")
+outputs = run(**inputs)  # inputs: a dictionary of input names to NumPy arrays
+```
+
+The signature does not change tensor shapes, data types, or layouts. Supply
+arrays in the converted model's layout; see [Layout selection](#layout-selection).
+The usual `set_tensor` / `invoke` / `get_tensor` interface remains available.
+Previously generated files need to be reconverted to include the signature.
+
 ## Command-line options
 
 The syntax below distinguishes options that require a value from switches that
@@ -78,6 +100,9 @@ Convolution and pooling regions remain channels-last in both modes because
 TFLite kernels require NHWC. In experimental mode, tensors outside those
 regions may retain their logical ONNX axis order when doing so avoids layout
 conversions.
+
+Non-rank-4 graph inputs and outputs retain their ONNX axis order in both
+modes, even when experimental mode uses a different layout internally.
 
 ## Large models
 

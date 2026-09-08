@@ -10,7 +10,7 @@ module {
   "onnx.EntryPoint"() {func = @gelu_exact_rank4} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.gelu"(%arg0) {approximate = false} : (tensor<1x4x5x3xf32>) -> tensor<1x4x5x3xf32>
 // CHECK-NOT: onnx.
 
@@ -24,7 +24,7 @@ module {
   "onnx.EntryPoint"() {func = @gelu_tanh_rank3} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<2x3x4xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x3x4xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.gelu"(%arg0) {approximate = true} : (tensor<2x3x4xf32>) -> tensor<2x3x4xf32>
 // CHECK-NOT: onnx.
 
@@ -39,7 +39,7 @@ module {
   "onnx.EntryPoint"() {func = @expand_rank3} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x1xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x1xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<[1, 3, 4]> : tensor<3xi32>
 // CHECK: "tfl.broadcast_to"(%arg0, {{.*}}) : (tensor<1x3x1xf32>, tensor<3xi32>) -> tensor<1x3x4xf32>
 // CHECK-NOT: onnx.
@@ -55,7 +55,7 @@ module {
   "onnx.EntryPoint"() {func = @expand_into_rank4} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<3x1x1xf32>) -> tensor<1x4x5x3xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<3x1x1xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.broadcast_to"(%arg0, {{.*}}) : (tensor<3x1x1xf32>, tensor<4xi32>) -> tensor<1x3x4x5xf32>
 // CHECK: "tfl.transpose"({{.*}}) : (tensor<1x3x4x5xf32>, tensor<4xi32>) -> tensor<1x4x5x3xf32>
 // CHECK-NOT: onnx.

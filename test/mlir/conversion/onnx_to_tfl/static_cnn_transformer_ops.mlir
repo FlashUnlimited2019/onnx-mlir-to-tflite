@@ -13,7 +13,7 @@ module {
   "onnx.EntryPoint"() {func = @full_rank5_upsample_and_pad} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x2x2x2xf32>) -> tensor<1x2x5x5x5xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x2x2x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x5x5x5xf32>{{( \{[^}]*\})?}})
 // CHECK: %[[INDICES:.*]] = arith.constant dense<
 // CHECK-SAME: tensor<16x5xi32>
 // CHECK: %[[UPDATES:.*]] = "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x2x2x2x2xf32>, tensor<1xi32>) -> tensor<16xf32>

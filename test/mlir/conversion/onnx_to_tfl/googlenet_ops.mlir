@@ -12,6 +12,6 @@ module {
   "onnx.EntryPoint"() {func = @lrn} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x3x4xf32>) -> tensor<1x3x3x4xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x3x4xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.local_response_normalization"(%arg0) {alpha = 2.000000e-05 : f32, beta = 7.500000e-01 : f32, bias = 1.000000e+00 : f32, radius = 2 : i32} : (tensor<1x3x3x4xf32>) -> tensor<1x3x3x4xf32>
 // CHECK-NOT: onnx.

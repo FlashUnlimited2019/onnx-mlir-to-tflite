@@ -40,7 +40,7 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>)
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x4x5x3xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"{{.*}}tensor<1x1x3xf32>
 // CHECK: "tfl.prelu"{{.*}} : (tensor<1x4x5x3xf32>, tensor<1x1x3xf32>) -> tensor<1x4x5x3xf32>
 // CHECK-NOT: onnx.
