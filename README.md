@@ -2,7 +2,7 @@
 <!-- Modified by FlashUnlimited2019 in 2026. -->
 
 <p align="center">
-  <img src="docs/logo/onnx-mlir-to-tflite-banner.png" alt="ONNX-MLIR to TFLite compiler pipeline" width="420">
+  <img src="docs/logo/onnx-mlir-to-tflite-banner.svg" alt="ONNX-MLIR to TFLite compiler pipeline" width="420">
 </p>
 
 # ONNX-MLIR to TFLite
