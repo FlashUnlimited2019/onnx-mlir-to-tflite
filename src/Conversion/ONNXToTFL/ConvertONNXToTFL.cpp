@@ -11,6 +11,7 @@
 
 #include "mlir/IR/Verifier.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/Support/JSON.h"
 
 using namespace mlir;
 
@@ -26,31 +27,31 @@ bool isSupportedONNXOperation(Operation *op) {
              ONNXSinOp, ONNXAbsOp, ONNXNegOp, ONNXRoundOp, ONNXSignOp,
              ONNXFloorOp, ONNXCeilOp, ONNXNotOp, ONNXHardmaxOp,
              ONNXReciprocalOp, ONNXBitShiftOp, ONNXEluOp, ONNXLessOp,
-             ONNXGeluOp, ONNXLogOp, ONNXPReluOp, ONNXSeluOp, ONNXSoftplusOp,
-             ONNXSoftsignOp, ONNXMeanOp, ONNXAndOp, ONNXOrOp, ONNXXorOp,
-             ONNXCumSumOp, ONNXOneHotOp, ONNXLpNormalizationOp, ONNXCeluOp,
-             ONNXThresholdedReluOp, ONNXAsinOp, ONNXAcosOp, ONNXAtanOp,
-             ONNXAtanhOp, ONNXSinhOp, ONNXCoshOp, ONNXAsinhOp, ONNXAcoshOp,
-             ONNXErfOp, ONNXIsInfOp, ONNXIsNaNOp, ONNXShrinkOp, ONNXIm2ColOp,
-             ONNXMeanVarianceNormalizationOp, ONNXMishOp, ONNXDFTOp, ONNXDetOp,
-             ONNXNegativeLogLikelihoodLossOp, ONNXMatMulOp, ONNXGemmOp,
-             ONNXTopKOp, ONNXSTFTOp, ONNXReshapeOp, ONNXTransposeOp,
-             ONNXConcatOp, ONNXExpandOp, ONNXSoftmaxOp, ONNXConvOp,
-             ONNXMaxPoolSingleOutOp, ONNXReduceMeanOp, ONNXReduceMeanV13Op,
-             ONNXReduceMaxOp, ONNXReduceMaxV13Op, ONNXReduceMinV13Op,
-             ONNXReduceSumOp, ONNXReduceSumV11Op, ONNXReduceL1Op,
-             ONNXReduceLogSumExpOp, ONNXReduceProdOp, ONNXReduceSumSquareOp,
-             ONNXSliceOp, ONNXSplitOp, ONNXResizeOp, ONNXPadOp, ONNXFlattenOp,
-             ONNXGatherOp, ONNXGatherElementsOp, ONNXScatterElementsOp,
-             ONNXScatterNDOp, ONNXSqueezeOp, ONNXUnsqueezeOp, ONNXTileOp,
-             ONNXWhereOp, ONNXGatherNDOp, ONNXClipOp, ONNXUpsampleAndPadOp,
-             ONNXDepthToSpaceOp, ONNXSpaceToDepthOp, ONNXMinOp, ONNXMaxOp,
-             ONNXLRNOp, ONNXLSTMOp, ONNXRNNOp, ONNXGRUOp, ONNXReverseSequenceOp,
-             ONNXGridSampleOp, ONNXMaxPoolOp, ONNXMaxUnpoolOp, ONNXCompressOp,
-             ONNXTriluOp, ONNXCenterCropPadOp, ONNXEyeLikeOp, ONNXCol2ImOp,
-             ONNXAffineGridOp, ONNXDeformConvOp, ONNXRoiAlignOp, ONNXLpPoolOp,
-             ONNXGlobalLpPoolOp, ONNXBatchNormalizationInferenceModeOp,
-             ONNXAttentionOp>(op) ||
+             ONNXLessOrEqualOp, ONNXGeluOp, ONNXLogOp, ONNXPReluOp, ONNXSeluOp,
+             ONNXSoftplusOp, ONNXSoftsignOp, ONNXMeanOp, ONNXAndOp, ONNXOrOp,
+             ONNXXorOp, ONNXCumSumOp, ONNXOneHotOp, ONNXLpNormalizationOp,
+             ONNXCeluOp, ONNXThresholdedReluOp, ONNXAsinOp, ONNXAcosOp,
+             ONNXAtanOp, ONNXAtanhOp, ONNXSinhOp, ONNXCoshOp, ONNXAsinhOp,
+             ONNXAcoshOp, ONNXErfOp, ONNXIsInfOp, ONNXIsNaNOp, ONNXShrinkOp,
+             ONNXIm2ColOp, ONNXMeanVarianceNormalizationOp, ONNXMishOp,
+             ONNXDFTOp, ONNXDetOp, ONNXNegativeLogLikelihoodLossOp,
+             ONNXMatMulOp, ONNXGemmOp, ONNXTopKOp, ONNXSTFTOp, ONNXReshapeOp,
+             ONNXTransposeOp, ONNXConcatOp, ONNXExpandOp, ONNXSoftmaxOp,
+             ONNXConvOp, ONNXMaxPoolSingleOutOp, ONNXReduceMeanOp,
+             ONNXReduceMeanV13Op, ONNXReduceMaxOp, ONNXReduceMaxV13Op,
+             ONNXReduceMinV13Op, ONNXReduceSumOp, ONNXReduceSumV11Op,
+             ONNXReduceL1Op, ONNXReduceLogSumExpOp, ONNXReduceProdOp,
+             ONNXReduceSumSquareOp, ONNXSliceOp, ONNXSplitOp, ONNXResizeOp,
+             ONNXPadOp, ONNXFlattenOp, ONNXGatherOp, ONNXGatherElementsOp,
+             ONNXScatterElementsOp, ONNXScatterNDOp, ONNXSqueezeOp,
+             ONNXUnsqueezeOp, ONNXTileOp, ONNXWhereOp, ONNXGatherNDOp,
+             ONNXClipOp, ONNXUpsampleAndPadOp, ONNXDepthToSpaceOp,
+             ONNXSpaceToDepthOp, ONNXMinOp, ONNXMaxOp, ONNXLRNOp, ONNXLSTMOp,
+             ONNXRNNOp, ONNXGRUOp, ONNXReverseSequenceOp, ONNXGridSampleOp,
+             ONNXMaxPoolOp, ONNXMaxUnpoolOp, ONNXCompressOp, ONNXTriluOp,
+             ONNXCenterCropPadOp, ONNXEyeLikeOp, ONNXCol2ImOp, ONNXAffineGridOp,
+             ONNXDeformConvOp, ONNXRoiAlignOp, ONNXLpPoolOp, ONNXGlobalLpPoolOp,
+             ONNXBatchNormalizationInferenceModeOp, ONNXAttentionOp>(op) ||
          isa<ONNXAveragePoolOp, ONNXHardSigmoidOp, ONNXHardSwishOp,
              ONNXLayerNormalizationOp, ONNXRMSLayerNormalizationOp,
              ONNXLeakyReluOp>(op) ||
@@ -177,6 +178,25 @@ LogicalResult prepareEntryPoint(ModuleOp module) {
   for (unsigned i = 0; i < function.getNumResults(); ++i)
     function.setResultAttr(i, "tf_saved_model.index_path",
         builder.getStrArrayAttr({getEntryValueName(function, i, true)}));
+  // The TensorFlow exporter sorts signature maps by name. Preserve public
+  // positional names separately so the driver can restore their order even
+  // when multiple output names refer to the same tensor after optimization.
+  llvm::json::Array inputNames, outputNames;
+  for (unsigned i = 0; i < function.getNumArguments(); ++i)
+    inputNames.push_back(getEntryValueName(function, i, false));
+  for (unsigned i = 0; i < function.getNumResults(); ++i)
+    outputNames.push_back(getEntryValueName(function, i, true));
+  std::string signatureOrder;
+  llvm::raw_string_ostream(signatureOrder) << llvm::json::Value(
+      llvm::json::Object{{"version", 1}, {"signature_key", "serving_default"},
+          {"inputs", std::move(inputNames)},
+          {"outputs", std::move(outputNames)}});
+  NamedAttrList metadata;
+  if (auto existing = module->getAttrOfType<DictionaryAttr>("tfl.metadata"))
+    metadata.append(existing.getValue());
+  metadata.set(
+      "onnx_mlir.signature_order", builder.getStringAttr(signatureOrder));
+  module->setAttr("tfl.metadata", metadata.getDictionary(module.getContext()));
   function.setPublic();
   function.setName("main");
   entry.erase();
@@ -412,6 +432,11 @@ public:
     config.buildMaterializations = false;
     if (failed(applyPartialConversion(module, target,
             FrozenRewritePatternSet(std::move(patterns)), config))) {
+      signalPassFailure();
+      return;
+    }
+    if (failed(optimizeTFLStaticIndexOperations(module))) {
+      module.emitError("ONNXToTFL static index optimization failed");
       signalPassFailure();
       return;
     }

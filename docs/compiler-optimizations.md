@@ -285,6 +285,31 @@ clearer in TFL form:
 The broadcast-folding proof checks the exact linear index mapping for bounded
 static tensors. Optional scalar scaling is retained on the unbroadcast source.
 
+### Static indices, slices, and masks
+
+A separate post-lowering phase works on physical TFL tensor shapes in both
+layout modes:
+
+- **Constant index folding:** evaluate proven constant `i1`, `i32`, and `i64`
+  indexing chains through views, tiling, concatenation, slices, broadcasting,
+  integer addition, comparisons, casts, and selection. Floating-point
+  arithmetic is not folded; signed addition overflow and out-of-range integer
+  narrowing retain the original operations.
+- **Concat/Slice simplification:** when a static slice lies entirely within one
+  concatenated operand, slice that operand directly, or reuse it if the slice
+  selects it in full. Cross-boundary slices and fused activations are retained;
+  other consumers of the concatenation are preserved.
+- **Static mask elimination:** trace the selected elements of a boolean mask,
+  including constant regions following a runtime-dependent concatenation. A
+  provably uniform `SelectV2` condition selects its branch directly only when
+  that branch has exactly the output type and shape. Runtime-dependent masks
+  and branches requiring broadcasting are retained.
+
+Only whitelisted stateless operations are removed when unused. Evaluation has
+explicit rank, recursion, element-count, and work limits; exceeding a limit
+skips the optimization. Shape, axis, element-type, and broadcasting checks do
+not depend on model names or observed runtime inputs.
+
 ## Safety and fallback behavior
 
 Layout and indexing rewrites preserve element mappings. Arithmetic recognition
@@ -304,10 +329,11 @@ If a proof fails, the pattern does not rewrite the graph. The operation then
 uses its established lowering or causes normal full-conversion failure if the
 configuration is unsupported.
 
-Post-lowering rewriting is restricted to existing and newly created
-`BatchMatMul` and `Transpose` roots. Generic folding, constant CSE, and region
-simplification are disabled in this local phase so it does not become an
-unbounded whole-module optimizer.
+Post-lowering matrix and layout rewriting is restricted to existing and newly
+created `BatchMatMul` and `Transpose` roots. Static index rewriting uses its own
+operation whitelist and evaluation budgets. Generic folding, constant CSE, and
+region simplification are disabled in these local phases so they do not become
+unbounded whole-module optimizers.
 
 Regression coverage includes positive and negative structural matches,
 batch-rank reduction with and without broadcasting, layout diagnostics,
@@ -316,6 +342,10 @@ MLIR legalization, FlatBuffer round trips, and end-to-end numerical checks.
 `test/e2e/run_transformer_rewrites.py` additionally checks split/bias and GELU
 forms across ranks 1–5, both layouts, and both settings of the optional TFL
 optimizer. Run it with `--help` for converter and work-directory options.
+`test/e2e/run_static_index_optimizations.py` checks index folding, shared
+Concat/Slice uses, and static-mask selection against NumPy across ranks 1–5,
+both layouts, and both TFL optimizer settings, including overflow fallbacks and
+bitwise preservation of floating-point exceptional values and signed zero.
 
 See [Convert an ONNX model](convert-model.md) for the complete driver option
 reference and [Architecture](architecture.md) for the compiler and toolchain

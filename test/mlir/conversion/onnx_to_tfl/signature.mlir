@@ -11,7 +11,13 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 
-// CHECK-LABEL: module attributes {tf_saved_model.semantics}
+// CHECK-LABEL: module attributes {
+// CHECK-SAME: tf_saved_model.semantics
+// CHECK-SAME: onnx_mlir.signature_order
+// CHECK-SAME: z/input:0
+// CHECK-SAME: a.bias
+// CHECK-SAME: result:0
+// CHECK-SAME: alias
 // CHECK: func.func @main(
 // CHECK-SAME: tf_saved_model.index_path = ["z/input:0"]
 // CHECK-SAME: tf_saved_model.index_path = ["a.bias"]
@@ -32,7 +38,12 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 
-// CHECK-LABEL: module attributes {tf_saved_model.semantics}
+// CHECK-LABEL: module attributes {
+// CHECK-SAME: tf_saved_model.semantics
+// CHECK-SAME: onnx_mlir.signature_order
+// CHECK-SAME: input0
+// CHECK-SAME: input1
+// CHECK-SAME: output0
 // CHECK: func.func @main(
 // CHECK-SAME: tf_saved_model.index_path = ["input0"]
 // CHECK-SAME: tf_saved_model.index_path = ["input1"]
@@ -50,7 +61,10 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 
-// CHECK-LABEL: module attributes {tf_saved_model.semantics}
+// CHECK-LABEL: module attributes {
+// CHECK-SAME: tf_saved_model.semantics
+// CHECK-SAME: onnx_mlir.signature_order
+// CHECK-SAME: constant
 // CHECK: func.func @main()
 // CHECK-SAME: tf_saved_model.index_path = ["constant"]
 // CHECK-SAME: inputs = "", outputs = "constant"

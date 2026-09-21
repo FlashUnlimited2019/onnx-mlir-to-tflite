@@ -62,6 +62,7 @@ void populateLoweringONNXMatMulGemmOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);
 void populateTFLMatMulPostLoweringPatterns(mlir::RewritePatternSet &);
 void populateTFLTransformerPostLoweringPatterns(mlir::RewritePatternSet &);
+mlir::LogicalResult optimizeTFLStaticIndexOperations(mlir::ModuleOp);
 void populateLoweringONNXSoftmaxOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);
 void populateLoweringONNXTopKOpToTFLPatterns(

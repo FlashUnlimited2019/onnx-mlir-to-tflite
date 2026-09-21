@@ -49,6 +49,7 @@ add_onnx_mlir_library(OMONNXToTFL
   Tensor/ScatterElements.cpp
   Tensor/ScatterND.cpp
   Tensor/StaticUpdate.cpp
+  Tensor/StaticIndexOptimize.cpp
   Tensor/Sequence.cpp
   Tensor/Pad.cpp
   Tensor/Reshape.cpp

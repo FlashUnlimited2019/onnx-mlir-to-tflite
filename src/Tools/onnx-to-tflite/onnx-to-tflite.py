@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 from typing import List, Optional
@@ -153,6 +155,201 @@ def _should_use_buffer_offset(input_path: Path) -> bool:
     return total_size >= 1536 * 1024 * 1024
 
 
+class _SignatureFlatBuffer:
+    """Bounded access to signature metadata using only the Python stdlib.
+
+    Field numbers follow TensorFlow's schema.fbs. Do not unpack/repack the
+    model: large files can contain weights addressed by absolute file offsets.
+    TensorFlow's full schema verifier still runs after normalization.
+    """
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.size = os.fstat(stream.fileno()).st_size
+
+    def check(self, position, size):
+        if position < 0 or size < 0 or position > self.size - size:
+            raise RuntimeError("signature metadata references bytes outside the file")
+
+    def read(self, position, size):
+        self.check(position, size)
+        self.stream.seek(position)
+        data = self.stream.read(size)
+        if len(data) != size:
+            raise RuntimeError("truncated signature metadata")
+        return data
+
+    def scalar(self, position, fmt):
+        return struct.unpack(fmt, self.read(position, struct.calcsize(fmt)))[0]
+
+    def indirect(self, position):
+        offset = self.scalar(position, "<I")
+        if offset < 4:
+            raise RuntimeError("invalid signature metadata offset")
+        target = position + offset
+        self.check(target, 4)
+        return target
+
+    def field(self, table, slot, width=4):
+        vtable = table - self.scalar(table, "<i")
+        vsize = self.scalar(vtable, "<H")
+        object_size = self.scalar(vtable + 2, "<H")
+        if vsize < 4 or vsize % 2 or object_size < 4:
+            raise RuntimeError("invalid signature metadata table")
+        self.check(vtable, vsize)
+        self.check(table, object_size)
+        entry = 4 + slot * 2
+        offset = self.scalar(vtable + entry, "<H") if entry < vsize else 0
+        if not offset:
+            return None
+        if offset < 4 or offset + width > object_size:
+            raise RuntimeError("invalid signature metadata field")
+        return table + offset
+
+    def uint(self, table, slot, fmt="<I"):
+        position = self.field(table, slot, struct.calcsize(fmt))
+        return self.scalar(position, fmt) if position is not None else 0
+
+    def vector(self, table, slot, width=4):
+        position = self.field(table, slot)
+        if position is None:
+            return 0, 0
+        vector = self.indirect(position)
+        count = self.scalar(vector, "<I")
+        self.check(vector + 4, count * width)
+        return vector + 4, count
+
+    def string(self, table, slot):
+        position = self.field(table, slot)
+        if position is None:
+            raise RuntimeError("missing signature metadata string")
+        start = self.indirect(position)
+        size = self.scalar(start, "<I")
+        if size > 16 * 1024 * 1024:
+            raise RuntimeError("signature metadata string exceeds 16 MiB")
+        if self.read(start + 4 + size, 1) != b"\0":
+            raise RuntimeError("unterminated signature metadata string")
+        return self.read(start + 4, size).decode("utf-8")
+
+    def order(self, model):
+        metadata, count = self.vector(model, 6)
+        matches = []
+        for i in range(count):
+            entry = self.indirect(metadata + 4 * i)
+            if self.string(entry, 0) == "onnx_mlir.signature_order":
+                matches.append(self.uint(entry, 1))
+        if len(matches) != 1:
+            raise RuntimeError(
+                "expected one onnx_mlir.signature_order metadata entry; "
+                "use an onnx-mlir-opt built with this driver"
+            )
+        buffers, count = self.vector(model, 4)
+        if matches[0] >= count:
+            raise RuntimeError("invalid signature order buffer index")
+        buffer = self.indirect(buffers + 4 * matches[0])
+        start, size = self.vector(buffer, 0, 1)
+        offset = self.uint(buffer, 1, "<Q")
+        if offset > 1:
+            if size:
+                raise RuntimeError("signature order buffer has ambiguous storage")
+            start, size = offset, self.uint(buffer, 2, "<Q")
+        if not 0 < size <= 16 * 1024 * 1024:
+            raise RuntimeError("invalid signature order metadata size")
+        order = json.loads(self.read(start, size))
+        if (
+            not isinstance(order, dict)
+            or type(order.get("version")) is not int
+            or order["version"] != 1
+            or order.get("signature_key") != "serving_default"
+        ):
+            raise RuntimeError("unsupported signature order metadata")
+        return order
+
+    def plan(self):
+        if self.read(4, 4) != b"TFL3":
+            raise RuntimeError("exported file does not have the TFL3 identifier")
+        model = self.indirect(0)
+        if self.uint(model, 0) != 3:
+            raise RuntimeError("unsupported TFLite model schema version")
+        order = self.order(model)
+        subgraphs, subgraph_count = self.vector(model, 2)
+        signatures, count = self.vector(model, 7)
+        if subgraph_count < 1 or count != 1:
+            raise RuntimeError(
+                "expected one serving_default signature and a main graph"
+            )
+        graph = self.indirect(subgraphs)
+        signature = self.indirect(signatures)
+        if (
+            self.string(signature, 2) != order["signature_key"]
+            or self.uint(signature, 4) != 0
+            or self.string(graph, 4) != "main"
+        ):
+            raise RuntimeError("serving_default does not reference the main graph")
+        _, tensor_count = self.vector(graph, 0)
+        patches = []
+        for slot, label in enumerate(("inputs", "outputs")):
+            names = order.get(label)
+            if (
+                not isinstance(names, list)
+                or any(not isinstance(name, str) or not name for name in names)
+                or len(set(names)) != len(names)
+            ):
+                raise RuntimeError(f"invalid ordered signature {label} names")
+            main_vector, main_count = self.vector(graph, slot + 1)
+            vector, count = self.vector(signature, slot)
+            if len(names) != main_count or count != main_count:
+                raise RuntimeError(f"signature/main {label} count mismatch")
+            entries = {}
+            for i in range(count):
+                entry = self.indirect(vector + 4 * i)
+                name = self.string(entry, 0)
+                if name in entries:
+                    raise RuntimeError(f"duplicate signature {label} name: {name}")
+                entries[name] = (entry, self.uint(entry, 1))
+            if set(entries) != set(names):
+                raise RuntimeError(
+                    f"signature {label} names differ from the ONNX entry"
+                )
+            for i, name in enumerate(names):
+                entry, tensor_index = entries[name]
+                if tensor_index >= tensor_count or tensor_index != self.scalar(
+                    main_vector + 4 * i, "<i"
+                ):
+                    raise RuntimeError(
+                        f"signature/main {label} mapping mismatch: {name}"
+                    )
+                position = vector + 4 * i
+                offset = entry - position
+                if not 4 <= offset <= 0xFFFFFFFF:
+                    raise RuntimeError("signature entry cannot be reordered in place")
+                replacement = struct.pack("<I", offset)
+                if self.read(position, 4) != replacement:
+                    patches.append((position, replacement))
+        if len({position for position, _ in patches}) != len(patches):
+            raise RuntimeError("overlapping signature vectors")
+        return patches
+
+
+def _normalize_signature_order(path: Path) -> None:
+    """Reorder only TensorMap vector references in the unpublished output.
+
+    Names, tensor indices, tables, weights, file length and buffer offsets stay
+    unchanged. Validate both directions completely before applying any writes.
+    """
+    try:
+        with path.open("r+b") as stream:
+            reader = _SignatureFlatBuffer(stream)
+            for position, replacement in reader.plan():
+                stream.seek(position)
+                stream.write(replacement)
+            stream.flush()
+            if reader.plan():
+                raise RuntimeError("signature order verification failed")
+    except (ValueError, struct.error) as error:
+        raise RuntimeError(f"invalid signature metadata: {error}") from error
+
+
 def main() -> int:
     args = _parse_args()
     script = Path(__file__)
@@ -289,6 +486,8 @@ def main() -> int:
         with flatbuffer_path.open("rb") as flatbuffer:
             if flatbuffer.read(8)[4:8] != b"TFL3":
                 raise RuntimeError("exported file does not have the TFL3 identifier")
+
+        _normalize_signature_order(flatbuffer_path)
 
         # Importing the file again exercises TensorFlow's schema verifier and
         # ensures the result is parseable as an actual TFLite model.

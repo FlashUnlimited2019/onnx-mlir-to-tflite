@@ -21,16 +21,25 @@ public:
       ConversionPatternRewriter &rewriter) const override {
     auto sourceInputType = dyn_cast<RankedTensorType>(op.getInput().getType());
     auto sourceResultType = dyn_cast<RankedTensorType>(op.getType());
+    bool supportedElementType =
+        sourceInputType && sourceResultType &&
+        (sourceInputType.getElementType().isInteger(1) ||
+            sourceInputType.getElementType().isF32() ||
+            sourceInputType.getElementType().isSignlessInteger(32) ||
+            sourceInputType.getElementType().isSignlessInteger(64)) &&
+        sourceInputType.getElementType() == sourceResultType.getElementType();
     if (!sourceInputType || !sourceResultType ||
-        failed(validateStaticF32Tensor(
-            op, adaptor.getInput().getType(), "Tile input")) ||
-        failed(validateStaticF32Tensor(op, sourceResultType, "Tile result")))
+        !sourceInputType.hasStaticShape() ||
+        !sourceResultType.hasStaticShape() || !supportedElementType) {
+      op.emitError("ONNXToTFL Tile requires static same-type bool, FP32, i32, "
+                   "or i64 input/result tensors");
       return failure();
+    }
 
     int64_t rank = sourceInputType.getRank();
     if (rank < 1 || rank > 8 || sourceResultType.getRank() != rank) {
-      op.emitError("ONNXToTFL Tile supports equal-rank static FP32 tensors "
-                   "of rank 1 through 8");
+      op.emitError("ONNXToTFL Tile supports equal-rank static tensors of "
+                   "rank 1 through 8");
       return failure();
     }
 
@@ -78,10 +87,10 @@ public:
                      "inert singleton axes");
         return failure();
       }
-      auto reducedInputType =
-          RankedTensorType::get(reducedInputShape, rewriter.getF32Type());
-      auto reducedResultType =
-          RankedTensorType::get(reducedResultShape, rewriter.getF32Type());
+      auto reducedInputType = RankedTensorType::get(
+          reducedInputShape, sourceInputType.getElementType());
+      auto reducedResultType = RankedTensorType::get(
+          reducedResultShape, sourceResultType.getElementType());
       Value reducedInputShapeValue =
           createI32ShapeConstant(rewriter, op.getLoc(), reducedInputShape);
       input = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
@@ -93,7 +102,10 @@ public:
     } else {
       resultType = convertRank4NCHWToNHWCType(sourceResultType);
     }
-    if (rank == 4)
+    // Only FP32 rank-4 tensors use the legacy NHWC layout at this lowering
+    // boundary. Integer and boolean tensors retain logical ONNX axis order,
+    // so their repeat vectors must retain that order too.
+    if (rank == 4 && sourceInputType.getElementType().isF32())
       physicalRepeats = {
           (*repeats)[0], (*repeats)[2], (*repeats)[3], (*repeats)[1]};
     Value repeatValue =

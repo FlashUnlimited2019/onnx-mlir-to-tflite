@@ -26,6 +26,12 @@ output names come from the ONNX graph. When converting MLIR without ONNX name
 attributes, the fallback names are `input0`, `input1`, ... and `output0`,
 `output1`, ... .
 
+The file's signature input and output entries follow the corresponding ONNX
+graph and `main` subgraph positions, including aliased outputs. The driver checks
+both names and tensor mappings before publishing the model. TensorFlow's
+`get_signature_list()` and some viewers may still display names alphabetically;
+signature calls bind by name, not by list position.
+
 ```python
 import tensorflow as tf
 

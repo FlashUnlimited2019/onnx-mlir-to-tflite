@@ -158,6 +158,8 @@ void populateLoweringONNXComparisonOpToTFLPatterns(
       typeConverter, context, "tfl.greater_equal", "GreaterOrEqual");
   patterns.add<ComparisonLowering<ONNXLessOp>>(
       typeConverter, context, "tfl.less", "Less");
+  patterns.add<ComparisonLowering<ONNXLessOrEqualOp>>(
+      typeConverter, context, "tfl.less_equal", "LessOrEqual");
 }
 
 } // namespace onnx_mlir

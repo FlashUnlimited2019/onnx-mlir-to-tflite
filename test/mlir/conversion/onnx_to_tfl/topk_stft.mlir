@@ -3,10 +3,10 @@
 // RUN: onnx-mlir-opt --convert-onnx-to-tfl --verify-each %s -split-input-file | FileCheck %s
 
 module {
-  func.func @topk(%arg0: tensor<2x4x6xf32>) -> tensor<2x2x6xf32> {
+  func.func @topk(%arg0: tensor<2x4x6xf32>) -> (tensor<2x2x6xf32>, tensor<2x2x6xi64>) {
     %k = arith.constant dense<2> : tensor<1xi64>
     %values, %indices = "onnx.TopK"(%arg0, %k) <{axis = 1 : si64, largest = 0 : si64, sorted = 0 : si64}> : (tensor<2x4x6xf32>, tensor<1xi64>) -> (tensor<2x2x6xf32>, tensor<2x2x6xi64>)
-    return %values : tensor<2x2x6xf32>
+    return %values, %indices : tensor<2x2x6xf32>, tensor<2x2x6xi64>
   }
   "onnx.EntryPoint"() {func = @topk} : () -> ()
 }

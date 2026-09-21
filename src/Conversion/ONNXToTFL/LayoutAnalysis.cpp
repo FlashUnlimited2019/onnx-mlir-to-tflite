@@ -73,7 +73,9 @@ bool isLayoutPreservingElementwise(Operation *op) {
       .Cases({"onnx.Div", "onnx.Pow", "onnx.Min", "onnx.Max"}, true)
       .Cases({"onnx.Mean", "onnx.Where", "onnx.And", "onnx.Or"}, true)
       .Cases({"onnx.Xor", "onnx.Equal", "onnx.Greater"}, true)
-      .Cases({"onnx.GreaterOrEqual", "onnx.Less", "onnx.Not"}, true)
+      .Cases(
+          {"onnx.GreaterOrEqual", "onnx.Less", "onnx.LessOrEqual", "onnx.Not"},
+          true)
       .Cases({"onnx.Relu", "onnx.Sigmoid", "onnx.Tanh", "onnx.Exp"}, true)
       .Cases({"onnx.Sqrt", "onnx.Abs", "onnx.Neg", "onnx.Log"}, true)
       .Cases({"onnx.Cos", "onnx.Sin", "onnx.Floor", "onnx.Ceil"}, true)

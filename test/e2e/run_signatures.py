@@ -4,6 +4,8 @@
 """Check named TFLite inference across layouts, optimizers and buffer storage."""
 
 import argparse
+from contextlib import nullcontext
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -43,6 +45,35 @@ def models():
             value("z/input:0", shape),
         ],
     )
+
+    for count in (5, 15):
+        # Neither public name order nor output production order is sorted.
+        # Distinct output positions may alias a single tensor after folding.
+        shape = [1, 2, 3, 4]
+        names = [f"port/{(i * 7) % count}:0" for i in range(count)]
+        output_names = [f"result/{count - i}:0" for i in range(count)]
+        nodes, initializers = [], []
+        for i, name in enumerate(names):
+            weight = f"weight{i}"
+            initializers.append(
+                numpy_helper.from_array(np.full(shape, i + 1, np.float32), weight)
+            )
+            nodes.append(helper.make_node("Add", [name, weight], [f"sum{i}"]))
+        for i, name in enumerate(output_names):
+            # Include a passthrough and two differently named aliased outputs.
+            source = (
+                names[0]
+                if i == 0
+                else ("sum0" if i in (1, count - 1) else f"sum{count - i}")
+            )
+            nodes.append(helper.make_node("Identity", [source], [name]))
+        yield helper.make_graph(
+            nodes,
+            f"ordered_{count}_io",
+            [value(name, shape) for name in names],
+            [value(name, shape) for name in output_names],
+            initializers,
+        )
     yield helper.make_graph(
         [],
         "typed_passthrough",
@@ -85,14 +116,24 @@ def compare(source, target, use_buffer_offset):
         signature.Outputs(i).Name().decode(): signature.Outputs(i).TensorIndex()
         for i in range(signature.OutputsLength())
     }
+    original = onnx.load(source, load_external_data=False).graph
+    initializer_names = {item.name for item in original.initializer}
+    expected_inputs = [
+        item.name for item in original.input if item.name not in initializer_names
+    ]
+    expected_outputs = [item.name for item in original.output]
+    assert list(inputs) == expected_inputs, (list(inputs), expected_inputs)
+    assert list(outputs) == expected_outputs, (list(outputs), expected_outputs)
     assert len(inputs) == signature.InputsLength() == graph.InputsLength()
     assert len(outputs) == signature.OutputsLength() == graph.OutputsLength()
-    assert set(inputs.values()) == {
+    assert list(inputs.values()) == [
         graph.Inputs(i) for i in range(graph.InputsLength())
-    }
-    assert set(outputs.values()) == {
+    ]
+    assert list(outputs.values()) == [
         graph.Outputs(i) for i in range(graph.OutputsLength())
-    }
+    ]
+    for name, index in inputs.items():
+        assert graph.Tensors(index).Name().decode() == name
     if use_buffer_offset and source.stem == "constant_no_inputs":
         assert any(model.Buffers(i).Offset() > 1 for i in range(model.BuffersLength()))
 
@@ -103,15 +144,23 @@ def compare(source, target, use_buffer_offset):
     )
     interpreter = tf.lite.Interpreter(model_path=str(target), num_threads=1)
     interpreter.allocate_tensors()
-    assert interpreter.get_signature_list() == {
-        "serving_default": {"inputs": sorted(inputs), "outputs": sorted(outputs)}
-    }
+    # Runtime APIs may rebuild name maps in alphabetical order independently
+    # of the file's vectors. Check their mappings, not their display order.
+    runtime_signature = interpreter.get_signature_list()["serving_default"]
+    assert set(runtime_signature["inputs"]) == set(inputs)
+    assert set(runtime_signature["outputs"]) == set(outputs)
     assert set(inputs) == {item.name for item in session.get_inputs()}
     assert set(outputs) == {item.name for item in session.get_outputs()}
     details = {item["index"]: item for item in interpreter.get_input_details()}
     # Use a second interpreter to compare the named and index-based interfaces.
     named_interpreter = tf.lite.Interpreter(model_path=str(target), num_threads=1)
     runner = named_interpreter.get_signature_runner("serving_default")
+    assert {
+        name: item["index"] for name, item in runner.get_input_details().items()
+    } == inputs
+    assert {
+        name: item["index"] for name, item in runner.get_output_details().items()
+    } == outputs
     for seed in (0, 1, 2):
         rng = np.random.default_rng(seed)
         feeds, physical_feeds = {}, {}
@@ -141,17 +190,36 @@ def compare(source, target, use_buffer_offset):
                 and converted.shape == reference.shape
             )
             np.testing.assert_allclose(converted, reference, rtol=1e-6, atol=1e-6)
+    return {
+        "onnx": str(source.resolve()),
+        "tflite": str(target.resolve()),
+        "input_names": expected_inputs,
+        "output_names": expected_outputs,
+        "main_input_indices": list(inputs.values()),
+        "main_output_indices": list(outputs.values()),
+        "onnx_main_signature_order": "PASS",
+        "numeric_seeds": 3,
+    }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--converter", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
+    parser.add_argument(
+        "--keep-artifacts", action="store_true", help="retain models and a JSON report"
+    )
     args = parser.parse_args()
     args.work_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix="signature-regression-", dir=args.work_dir
-    ) as directory:
+    directory_context = (
+        nullcontext(tempfile.mkdtemp(prefix="signature-regression-", dir=args.work_dir))
+        if args.keep_artifacts
+        else tempfile.TemporaryDirectory(
+            prefix="signature-regression-", dir=args.work_dir
+        )
+    )
+    records = []
+    with directory_context as directory:
         root = Path(directory)
         for graph in models():
             source = root / f"{graph.name}.onnx"
@@ -187,12 +255,20 @@ def main():
                         )
                         if result.returncode:
                             raise RuntimeError(result.stdout + result.stderr)
-                        compare(source, target, offset)
+                        record = compare(source, target, offset)
+                        record.update(
+                            layout=layout, optimize=optimize, buffer_offset=offset
+                        )
+                        records.append(record)
                         print(
                             f"PASS {graph.name}: layout={layout}, optimize={optimize}, "
                             f"buffer_offset={offset}, seeds=3",
                             flush=True,
                         )
+        if args.keep_artifacts:
+            report = root / "results.json"
+            report.write_text(json.dumps(records, indent=2) + "\n")
+            print(f"Artifacts and report: {root.resolve()}", flush=True)
     return 0
 
 
