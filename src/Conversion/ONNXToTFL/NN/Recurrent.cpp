@@ -6,6 +6,8 @@
 
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
+#include <utility>
+
 using namespace mlir;
 
 namespace onnx_mlir {
@@ -290,6 +292,129 @@ public:
   }
 };
 
+// Bound the additional full-sequence projection storage across directions.
+// Very short sequences retain the original path to avoid split overhead.
+bool usePackedGRU(
+    int64_t directions, int64_t length, int64_t batch, int64_t hidden) {
+  if (length < 3)
+    return false;
+  int64_t remaining = 1024 * 1024;
+  for (int64_t dim : {directions, length, batch, int64_t(3), hidden}) {
+    if (dim <= 0 || dim > remaining)
+      return false;
+    remaining /= dim;
+  }
+  return true;
+}
+
+std::pair<Value, Value> lowerPackedGRUDirection(Location loc, Value input,
+    Value hidden, ArrayRef<float> weights, ArrayRef<float> recurrentWeights,
+    ArrayRef<float> biases, int64_t direction, int64_t length, int64_t batch,
+    int64_t inputSize, int64_t hiddenSize, bool reverse, bool linearBeforeReset,
+    float clipLimit, ConversionPatternRewriter &rewriter) {
+  auto stateType =
+      RankedTensorType::get({batch, hiddenSize}, rewriter.getF32Type());
+  auto pairType =
+      RankedTensorType::get({batch, 2 * hiddenSize}, rewriter.getF32Type());
+  SmallVector<float> wb(3 * hiddenSize, 0.0f), rb(3 * hiddenSize, 0.0f);
+  if (!biases.empty()) {
+    llvm::copy(
+        biases.slice(direction * 6 * hiddenSize, 3 * hiddenSize), wb.begin());
+    llvm::copy(biases.slice(
+                   direction * 6 * hiddenSize + 3 * hiddenSize, 3 * hiddenSize),
+        rb.begin());
+  }
+  // X has no recurrent dependency. Keep input/recurrent bias additions
+  // separate, preserving the placement of clipping and reset multiplication.
+  Value flat = reshape(loc, input, {length * batch, inputSize}, rewriter);
+  auto project = [&](int64_t offset, int64_t width) {
+    auto type =
+        RankedTensorType::get({length * batch, width}, rewriter.getF32Type());
+    Value w = f32Constant(loc, {width, inputSize},
+        weights.slice((direction * 3 * hiddenSize + offset) * inputSize,
+            width * inputSize),
+        rewriter);
+    return binary(loc, "tfl.add", matmul(loc, flat, w, type, rewriter),
+        f32Constant(
+            loc, {width}, ArrayRef<float>(wb).slice(offset, width), rewriter),
+        type, rewriter);
+  };
+  // Keep the candidate separate: it has different reset/activation semantics.
+  // Equal z/r splitting avoids variable-split boundaries in accelerated graphs.
+  Value projectedPair = project(0, 2 * hiddenSize);
+  Value projectedCandidate = project(2 * hiddenSize, hiddenSize);
+  auto timestep = [&](Value projection, int64_t t, int64_t width) {
+    auto type = RankedTensorType::get({batch, width}, rewriter.getF32Type());
+    Value begin = createI32ShapeConstant(rewriter, loc, {t * batch, 0});
+    Value size = createI32ShapeConstant(rewriter, loc, {batch, width});
+    return createTFLOperation(rewriter, loc, "tfl.slice", TypeRange{type},
+        ValueRange{projection, begin, size})
+        ->getResult(0);
+  };
+  Value r = f32Constant(loc, {2 * hiddenSize, hiddenSize},
+      recurrentWeights.slice(
+          direction * 3 * hiddenSize * hiddenSize, 2 * hiddenSize * hiddenSize),
+      rewriter);
+  Value rbPacked = f32Constant(loc, {2 * hiddenSize},
+      ArrayRef<float>(rb).take_front(2 * hiddenSize), rewriter);
+  Value candidateR = f32Constant(loc, {hiddenSize, hiddenSize},
+      recurrentWeights.slice((direction * 3 + 2) * hiddenSize * hiddenSize,
+          hiddenSize * hiddenSize),
+      rewriter);
+  Value candidateRb = f32Constant(
+      loc, {hiddenSize}, ArrayRef<float>(rb).take_back(hiddenSize), rewriter);
+  Value one = createF32ScalarTensorConstant(rewriter, loc, 1.0f);
+  SmallVector<Value> outputs(length);
+  for (int64_t iteration = 0; iteration < length; ++iteration) {
+    int64_t t = reverse ? length - 1 - iteration : iteration;
+    Value xPair = timestep(projectedPair, t, 2 * hiddenSize);
+    Value xCandidate = timestep(projectedCandidate, t, hiddenSize);
+    Value pairRecurrent =
+        binary(loc, "tfl.add", matmul(loc, hidden, r, pairType, rewriter),
+            rbPacked, pairType, rewriter);
+    Value pair = unary(loc, "tfl.logistic",
+        clip(loc,
+            binary(loc, "tfl.add", xPair, pairRecurrent, pairType, rewriter),
+            clipLimit, rewriter),
+        pairType, rewriter);
+    Value axis = createI32ScalarTensorConstant(rewriter, loc, 1);
+    Operation *zr = createTFLOperation(rewriter, loc, "tfl.split",
+        TypeRange{stateType, stateType}, ValueRange{axis, pair},
+        {rewriter.getNamedAttr("num_splits", rewriter.getI32IntegerAttr(2))});
+    Value update = zr->getResult(0), reset = zr->getResult(1);
+    Value candidateRecurrent;
+    if (linearBeforeReset) {
+      candidateRecurrent = binary(loc, "tfl.add",
+          matmul(loc, hidden, candidateR, stateType, rewriter), candidateRb,
+          stateType, rewriter);
+      candidateRecurrent = binary(
+          loc, "tfl.mul", reset, candidateRecurrent, stateType, rewriter);
+    } else
+      candidateRecurrent = binary(loc, "tfl.add",
+          matmul(loc,
+              binary(loc, "tfl.mul", reset, hidden, stateType, rewriter),
+              candidateR, stateType, rewriter),
+          candidateRb, stateType, rewriter);
+    Value candidate = unary(loc, "tfl.tanh",
+        clip(loc,
+            binary(loc, "tfl.add", xCandidate, candidateRecurrent, stateType,
+                rewriter),
+            clipLimit, rewriter),
+        stateType, rewriter);
+    Value inverse = binary(loc, "tfl.sub", one, update, stateType, rewriter);
+    hidden = binary(loc, "tfl.add",
+        binary(loc, "tfl.mul", inverse, candidate, stateType, rewriter),
+        binary(loc, "tfl.mul", update, hidden, stateType, rewriter), stateType,
+        rewriter);
+    outputs[t] = hidden;
+  }
+  return {pack(loc, outputs, 0,
+              RankedTensorType::get(
+                  {length, batch, hiddenSize}, rewriter.getF32Type()),
+              rewriter),
+      hidden};
+}
+
 class GRULowering final : public OpConversionPattern<ONNXGRUOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -338,13 +463,28 @@ public:
     Location loc = op.getLoc();
     auto stateType =
         RankedTensorType::get({batchSize, hiddenSize}, rewriter.getF32Type());
-    SmallVector<Value> timesteps = splitTimesteps(
-        loc, adaptor.getX(), sequenceLength, batchSize, inputSize, rewriter);
+    bool packed =
+        usePackedGRU(directions, sequenceLength, batchSize, hiddenSize);
+    SmallVector<Value> timesteps;
+    if (!packed)
+      timesteps = splitTimesteps(
+          loc, adaptor.getX(), sequenceLength, batchSize, inputSize, rewriter);
     SmallVector<Value> states = initialStates(loc, adaptor.getInitialH(),
         directions, batchSize, hiddenSize, rewriter);
     SmallVector<Value> sequences;
     SmallVector<Value> finals;
     for (int64_t d = 0; d < directions; ++d) {
+      if (packed) {
+        bool reverse = op.getDirection() == "reverse" ||
+                       (op.getDirection() == "bidirectional" && d == 1);
+        auto result = lowerPackedGRUDirection(loc, adaptor.getX(), states[d],
+            *wValues, *rValues, bValues, d, sequenceLength, batchSize,
+            inputSize, hiddenSize, reverse, op.getLinearBeforeReset() != 0,
+            clipLimit, rewriter);
+        sequences.push_back(result.first);
+        finals.push_back(result.second);
+        continue;
+      }
       SmallVector<Value> ws, rs, wbs, rbs;
       for (int64_t gate = 0; gate < 3; ++gate) {
         int64_t wOffset = (d * 3 * hiddenSize + gate * hiddenSize) * inputSize;

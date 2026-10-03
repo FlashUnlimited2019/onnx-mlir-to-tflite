@@ -261,6 +261,24 @@ Both transformations validate matrix dimensions, result shapes, permutation
 composition, integer bounds, and broadcasting behavior before changing the
 graph.
 
+### Static GRU projection packing
+
+Static FP32 GRUs can precompute input projections across all time steps by
+flattening time and batch into matrix rows. Update/reset gate projections and
+their sigmoid are combined, while the candidate gate remains separate to
+preserve both `linear_before_reset` equations. Constant row slices and an equal
+`Split` expose the results without introducing variable-split boundaries for
+each gate. Execution remains statically unrolled with ordinary TFL builtins;
+no recurrent, control-flow, or custom operator is introduced.
+
+The rewrite preserves direction, initial states, bias placement, clipping,
+and output ordering. Sequences shorter than three steps and projections above
+a 4 MiB aggregate FP32 storage budget retain the previous lowering. The budget
+limits the additional full-sequence projections, not total runtime memory.
+Numerical tests cover both layouts, both reset forms, all directions, and
+optional TFL optimization and runtime delegation. Floating-point matrix kernels
+may produce small rounding differences; speedups remain backend-dependent.
+
 ### Equal-split selection
 
 Static splits with equal, positive output widths use the TFL `Split` builtin.
