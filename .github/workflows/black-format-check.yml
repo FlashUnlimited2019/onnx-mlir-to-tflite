@@ -7,8 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - uses: psf/black@stable
+
+      - uses: psf/black@26.5.1
         with:
-          options: "--check --exclude third_party"
+          options: "--check --diff --exclude third_party"
           src: "."

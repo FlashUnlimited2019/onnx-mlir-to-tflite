@@ -16,7 +16,6 @@ import unittest
 import flatbuffers
 from tensorflow.lite.python import schema_py_generated as schema
 
-
 DRIVER = (
     Path(__file__).resolve().parents[2] / "src/Tools/onnx-to-tflite/onnx-to-tflite.py"
 )

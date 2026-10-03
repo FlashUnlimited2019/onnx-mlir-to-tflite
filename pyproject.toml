@@ -32,3 +32,7 @@ Issues = "https://github.com/onnx/onnx-mlir/issues"
 cmake.args = ["-DONNX_MLIR_TARGET_TO_BUILD=OMPyRt"]
 wheel.packages = ["src/Runtime/python/om_pyrt/src/om_pyrt"]
 install.components = ["om_pyrt"]
+
+[tool.black]
+required-version = "26.5.1"
+target-version = ["py39"]
