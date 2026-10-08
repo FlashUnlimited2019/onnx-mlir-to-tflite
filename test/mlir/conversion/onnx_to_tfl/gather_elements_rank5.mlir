@@ -15,6 +15,7 @@ module {
 }
 
 // CHECK-LABEL: func.func @main(%arg0: tensor<2x2x2x2x3xf32>{{( \{[^}]*\})?}})
-// CHECK: arith.constant {{.*}} : tensor<2x1x2x2x3x5xi32>
-// CHECK: "tfl.gather_nd"(%arg0, {{.*}}) : (tensor<2x2x2x2x3xf32>, tensor<2x1x2x2x3x5xi32>) -> tensor<2x1x2x2x3xf32>
+// CHECK: arith.constant {{.*}} : tensor<24x5xi32>
+// CHECK: "tfl.gather_nd"(%arg0, {{.*}}) : (tensor<2x2x2x2x3xf32>, tensor<24x5xi32>) -> tensor<24xf32>
+// CHECK: "tfl.reshape"{{.*}} : (tensor<24xf32>, tensor<5xi32>) -> tensor<2x1x2x2x3xf32>
 // CHECK-NOT: onnx.

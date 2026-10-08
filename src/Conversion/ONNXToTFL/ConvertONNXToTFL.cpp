@@ -461,6 +461,11 @@ public:
       signalPassFailure();
       return;
     }
+    if (failed(optimizeTFLLocalLayouts(module))) {
+      module.emitError("ONNXToTFL local layout cleanup failed");
+      signalPassFailure();
+      return;
+    }
     if (failed(finalizeEntryPointTypes(module))) {
       signalPassFailure();
       return;

@@ -153,7 +153,8 @@ module {
 }
 
 // CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x2x3x4xi64>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x4xf32>{{( \{[^}]*\})?}})
-// CHECK: "tfl.gather_nd"{{.*}} -> tensor<1x2x3x4xf32>
+// CHECK: "tfl.gather_nd"{{.*}} -> tensor<24xf32>
+// CHECK: "tfl.reshape"{{.*}} -> tensor<1x2x3x4xf32>
 // CHECK-NOT: "tfl.transpose"
 // CHECK-NOT: onnx.
 

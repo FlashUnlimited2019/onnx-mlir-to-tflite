@@ -158,9 +158,8 @@ public:
 
     // A decomposed ConvTranspose3D frequently carries an inert singleton
     // spatial axis, for example NCHW1 with strides [4,4,1]. Remove that axis
-    // while inserting zeros and padding so all temporary tensors stay rank 5
-    // or lower, then restore the rank-5 type for the following reducible
-    // Conv3D.
+    // while inserting zeros and padding, then restore the rank-5 type for the
+    // following reducible Conv3D.
     if (inputType.getRank() == 5) {
       std::optional<int64_t> collapsedSpatialAxis;
       for (int64_t axis = 0; axis < 3; ++axis) {
@@ -249,6 +248,28 @@ public:
         return;
       SmallVector<int64_t> splitShape(currentShape);
       splitShape.insert(splitShape.begin() + axis + 1, 1);
+      int64_t paddingAxis = axis + 1;
+      // Zero insertion repeats a contiguous suffix after every prefix. Fold
+      // those two groups to [prefix, 1, suffix] without moving any data, so a
+      // rank-4 activation does not require a rank-5 Pad. Preserve the original
+      // path if a folded dimension cannot be represented by a TFL shape.
+      if (currentShape.size() == 4) {
+        int64_t prefix = 1, suffix = 1;
+        bool canFold = true;
+        for (int64_t i = 0; i < 4; ++i) {
+          int64_t &product = i <= axis ? prefix : suffix;
+          if (currentShape[i] <= 0 ||
+              product > std::numeric_limits<int32_t>::max() / currentShape[i]) {
+            canFold = false;
+            break;
+          }
+          product *= currentShape[i];
+        }
+        if (canFold) {
+          splitShape = {prefix, 1, suffix};
+          paddingAxis = 1;
+        }
+      }
       auto splitType = RankedTensorType::get(splitShape, rewriter.getF32Type());
       Value splitShapeValue = createI32ShapeConstant(rewriter, loc, splitShape);
       current = createTFLOperation(rewriter, loc, "tfl.reshape",
@@ -256,9 +277,9 @@ public:
                     ->getResult(0);
 
       SmallVector<int64_t> pairs(2 * splitShape.size(), 0);
-      pairs[2 * (axis + 1) + 1] = stride - 1;
+      pairs[2 * paddingAxis + 1] = stride - 1;
       SmallVector<int64_t> paddedShape(splitShape);
-      paddedShape[axis + 1] = stride;
+      paddedShape[paddingAxis] = stride;
       auto paddedType =
           RankedTensorType::get(paddedShape, rewriter.getF32Type());
       Value padding = createPaddingMatrix(loc, pairs, rewriter);

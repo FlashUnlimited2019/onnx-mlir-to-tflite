@@ -24,17 +24,20 @@ public:
     auto resultType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
     if (!resultType || !resultType.hasStaticShape() ||
         (!resultType.getElementType().isF32() &&
-            !resultType.getElementType().isInteger(1)))
-      return op.emitError(
-                 "Concat requires a static FP32 or boolean result tensor"),
+            !resultType.getElementType().isInteger(1) &&
+            !resultType.getElementType().isSignlessInteger(32) &&
+            !resultType.getElementType().isSignlessInteger(64)))
+      return op.emitError("Concat requires a static FP32, boolean, i32, or i64 "
+                          "result tensor"),
              failure();
     for (Type type : op->getOperandTypes()) {
       auto inputType = dyn_cast<RankedTensorType>(type);
       if (!inputType || !inputType.hasStaticShape() ||
           inputType.getElementType() != resultType.getElementType() ||
           inputType.getRank() != resultType.getRank())
-        return op.emitError("Concat requires matching static FP32 or boolean "
-                            "input/result tensors"),
+        return op.emitError(
+                   "Concat requires matching static FP32, boolean, i32, or i64 "
+                   "input/result tensors"),
                failure();
     }
 

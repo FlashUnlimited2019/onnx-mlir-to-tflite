@@ -66,8 +66,8 @@ module {
 }
 // CHECK-LABEL: func.func @main(%arg0: tensor<1x3x2x3x1xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x7x13x1xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x3x2x3x1xf32>, tensor<4xi32>) -> tensor<1x3x2x3xf32>
-// CHECK: "tfl.padv2"{{.*}} : (tensor<1x3x2x1x3xf32>, tensor<5x2xi32>, tensor<f32>) -> tensor<1x3x2x2x3xf32>
-// CHECK: "tfl.padv2"{{.*}} : (tensor<1x3x4x3x1xf32>, tensor<5x2xi32>, tensor<f32>) -> tensor<1x3x4x3x3xf32>
+// CHECK: "tfl.padv2"{{.*}} : (tensor<6x1x3xf32>, tensor<3x2xi32>, tensor<f32>) -> tensor<6x2x3xf32>
+// CHECK: "tfl.padv2"{{.*}} : (tensor<36x1x1xf32>, tensor<3x2xi32>, tensor<f32>) -> tensor<36x3x1xf32>
 // CHECK: "tfl.reshape"{{.*}} : (tensor<1x3x7x13xf32>, tensor<5xi32>) -> tensor<1x3x7x13x1xf32>
 // CHECK-NOT: tensor<1x3x2x3x1x1xf32>
 

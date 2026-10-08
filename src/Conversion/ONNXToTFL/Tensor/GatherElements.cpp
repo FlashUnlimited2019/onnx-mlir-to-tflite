@@ -93,8 +93,14 @@ public:
       return failure();
     }
 
+    // A full coordinate selects one scalar. Flatten the tuple prefix rather
+    // than creating rank-5/rank-6 indices for rank-4/rank-5 GatherElements;
+    // reshaping the scalar results restores the original logical order.
+    bool flattenCoordinates = rank >= 4;
     SmallVector<int64_t> coordinateShape(indicesShape);
     coordinateShape.push_back(rank);
+    if (flattenCoordinates)
+      coordinateShape = {outputElements, rank};
     auto coordinateType =
         RankedTensorType::get(coordinateShape, rewriter.getI32Type());
     Value coordinateValue;
@@ -154,7 +160,7 @@ public:
 
       // TFLite's broadcast comparison kernel dispatches through a fixed 4D
       // implementation. Flatten rank-5 runtime indices while normalizing
-      // negatives, then restore their static logical shape.
+      // negatives. The flattened coordinate path needs no rank-5 restoration.
       Value comparisonIndices = runtimeIndices;
       auto comparisonType = i32IndicesType;
       if (rank > 4) {
@@ -185,19 +191,12 @@ public:
           "tfl.select_v2", TypeRange{comparisonType},
           ValueRange{negative, wrapped, comparisonIndices})
                               ->getResult(0);
-      if (rank > 4) {
-        Value logicalShape =
-            createI32ShapeConstant(rewriter, op.getLoc(), indicesShape);
-        runtimeIndices = createTFLOperation(rewriter, op.getLoc(),
-            "tfl.reshape", TypeRange{i32IndicesType},
-            ValueRange{comparisonIndices, logicalShape})
-                             ->getResult(0);
-      } else {
-        runtimeIndices = comparisonIndices;
-      }
+      runtimeIndices = comparisonIndices;
 
       SmallVector<int64_t> componentShape(indicesShape);
       componentShape.push_back(1);
+      if (flattenCoordinates)
+        componentShape = {outputElements, 1};
       auto componentType =
           RankedTensorType::get(componentShape, rewriter.getI32Type());
       Value componentShapeValue =
@@ -231,7 +230,8 @@ public:
                     componentType, ArrayRef<int32_t>(values))));
       }
       SmallVector<NamedAttribute> concatenateAttributes{
-          rewriter.getNamedAttr("axis", rewriter.getI32IntegerAttr(rank)),
+          rewriter.getNamedAttr(
+              "axis", rewriter.getI32IntegerAttr(coordinateShape.size() - 1)),
           getFusedActivationNone(rewriter)};
       coordinateValue =
           createTFLOperation(rewriter, op.getLoc(), "tfl.concatenation",
@@ -250,9 +250,20 @@ public:
     }
     RankedTensorType calculationResultType =
         hasPerValueLayout ? logicalResultType : sourceResultType;
+    RankedTensorType gatherResultType =
+        flattenCoordinates ? RankedTensorType::get({outputElements},
+                                 calculationResultType.getElementType())
+                           : calculationResultType;
     Value gathered = createTFLOperation(rewriter, op.getLoc(), "tfl.gather_nd",
-        TypeRange{calculationResultType}, ValueRange{data, coordinateValue})
+        TypeRange{gatherResultType}, ValueRange{data, coordinateValue})
                          ->getResult(0);
+    if (flattenCoordinates) {
+      Value shape = createI32ShapeConstant(
+          rewriter, op.getLoc(), calculationResultType.getShape());
+      gathered = createTFLOperation(rewriter, op.getLoc(), "tfl.reshape",
+          TypeRange{calculationResultType}, ValueRange{gathered, shape})
+                     ->getResult(0);
+    }
     if (hasPerValueLayout) {
       FailureOr<Value> result = convertTFLValueLayout(rewriter, op.getLoc(),
           gathered, logicalResultType, identityLayout,

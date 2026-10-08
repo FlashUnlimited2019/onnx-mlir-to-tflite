@@ -58,7 +58,8 @@ module {
 }
 // CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x2xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x2xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"({{.*}}) : (tensor<1x2x3x2xf32>, tensor<4xi32>) -> tensor<1x2x2x3xf32>
-// CHECK: "tfl.gather_nd"({{.*}}) : (tensor<1x2x2x3xf32>, tensor<1x2x2x3x4xi32>) -> tensor<1x2x2x3xf32>
+// CHECK: "tfl.gather_nd"({{.*}}) : (tensor<1x2x2x3xf32>, tensor<12x4xi32>) -> tensor<12xf32>
+// CHECK: "tfl.reshape"{{.*}} : (tensor<12xf32>, tensor<4xi32>) -> tensor<1x2x2x3xf32>
 // CHECK: "tfl.transpose"({{.*}}) : (tensor<1x2x2x3xf32>, tensor<4xi32>) -> tensor<1x2x3x2xf32>
 
 // -----
