@@ -191,9 +191,12 @@ module {
   "onnx.EntryPoint"() {func = @identity_layout_scatter_nd} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x4xf32>{{( \{[^}]*\})?}})
-// CHECK: "tfl.scatter_nd"
-// CHECK-NOT: "tfl.transpose"
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x4x2xf32>{{( \{[^}]*\})?}})
+// CHECK: "tfl.transpose"{{.*}} -> tensor<1x3x4x2xf32>
+// CHECK: "tfl.reshape"(%arg1, {{.*}}) {{.*}} -> tensor<1x3x4x1xf32>
+// CHECK: "tfl.slice"{{.*}} -> tensor<1x3x4x1xf32>
+// CHECK: "tfl.concatenation"{{.*}} {axis = 3 : i32, fused_activation_function = "NONE"}
+// CHECK-NOT: "tfl.scatter_nd"
 // CHECK-NOT: onnx.
 
 // -----
@@ -210,8 +213,10 @@ module {
 }
 
 // CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x4xf32>{{( \{[^}]*\})?}})
-// CHECK: "tfl.gather_nd"{{.*}} -> tensor<1x3x4xf32>
-// CHECK-NOT: "tfl.transpose"
+// CHECK: "tfl.transpose"{{.*}} -> tensor<1x3x4x2xf32>
+// CHECK: "tfl.slice"{{.*}} -> tensor<1x3x4x1xf32>
+// CHECK: "tfl.reshape"{{.*}} -> tensor<1x3x4xf32>
+// CHECK-NOT: "tfl.gather_nd"
 // CHECK-NOT: onnx.
 
 // -----

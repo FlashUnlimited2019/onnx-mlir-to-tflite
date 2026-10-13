@@ -481,7 +481,7 @@ public:
     if (name != "Attention" && name != "MultiHeadAttention" &&
         name != "GroupQueryAttention")
       return failure();
-    if (op.getNumResults() != 1)
+    if (name != "GroupQueryAttention" && op.getNumResults() != 1)
       return op.emitError(
                  "static com.microsoft Attention lowering currently supports "
                  "the primary output only"),
@@ -642,6 +642,10 @@ private:
 
   LogicalResult lowerGroupQueryAttention(ONNXCustomOp op, ValueRange operands,
       ConversionPatternRewriter &rewriter) const {
+    if (op.getNumResults() < 1 || op.getNumResults() > 3)
+      return op.emitError("static GroupQueryAttention supports the primary "
+                          "output and optional present_key/present_value"),
+             failure();
     if (op.getNumOperands() < 7 || !isAbsentOperand(op, 3) ||
         !isAbsentOperand(op, 4) || isAbsentOperand(op, 5) ||
         isAbsentOperand(op, 6) || !isAbsentOperand(op, 7) ||
@@ -734,6 +738,29 @@ private:
                  "seqlens_k and total_sequence_length"),
              failure();
 
+    // With no past cache, the present tensors are the original K/V heads,
+    // not the copies expanded to the query-head count for attention itself.
+    int64_t batch = queryType.getShape()[0];
+    if (keyType.getShape()[0] != batch || valueType != keyType ||
+        queryType.getShape()[2] % queryHeads ||
+        keyType.getShape()[2] % kvHeads ||
+        queryType.getShape()[2] / queryHeads != keyType.getShape()[2] / kvHeads)
+      return op.emitError("incompatible static GroupQueryAttention K/V shapes"),
+             failure();
+    int64_t headSize = keyType.getShape()[2] / kvHeads;
+    SmallVector<int64_t> cacheShape{batch, kvHeads, keySequence, headSize};
+    for (unsigned i = 1; i < op.getNumResults(); ++i) {
+      if (isa<NoneType>(op.getResult(i).getType()))
+        continue;
+      auto cacheType = dyn_cast<RankedTensorType>(op.getResult(i).getType());
+      if (!cacheType || !cacheType.getElementType().isF32() ||
+          !llvm::equal(cacheType.getShape(), cacheShape))
+        return op.emitError(
+                   "static GroupQueryAttention present outputs "
+                   "must have FP32 B,kv_heads,sequence,head_size shape"),
+               failure();
+    }
+
     StaticAttentionInputs inputs{query, key, value, queryType, keyType,
         valueType, *outputType, queryHeads, kvHeads,
         getOptionalFloatAttribute(op, "scale"), /*causal=*/true, -10000.0f,
@@ -741,7 +768,28 @@ private:
     FailureOr<Value> result = lowerStaticAttention(op, inputs, rewriter);
     if (failed(result))
       return failure();
-    rewriter.replaceOp(op, *result);
+    SmallVector<Value> results{*result};
+    TFLAttentionBuilder create(op, rewriter);
+    for (unsigned i = 1; i < op.getNumResults(); ++i) {
+      if (isa<NoneType>(op.getResult(i).getType())) {
+        SmallVector<NamedAttribute> attrs{
+            rewriter.getNamedAttr("value", rewriter.getUnitAttr())};
+        results.push_back(createTFLOperation(rewriter, op.getLoc(),
+            "tfl.no_value", TypeRange{rewriter.getNoneType()}, {}, attrs)
+                              ->getResult(0));
+        continue;
+      }
+      auto cacheType = cast<RankedTensorType>(op.getResult(i).getType());
+      Value bsnh = create.reshape(
+          i == 1 ? key : value, {batch, keySequence, kvHeads, headSize});
+      auto physical =
+          convertTFLValueLayout(rewriter, op.getLoc(), bsnh, cacheType,
+              {0, 2, 1, 3}, getONNXToTFLPhysicalToLogicalLayout(cacheType));
+      if (failed(physical))
+        return failure();
+      results.push_back(*physical);
+    }
+    rewriter.replaceOp(op, results);
     return success();
   }
 };

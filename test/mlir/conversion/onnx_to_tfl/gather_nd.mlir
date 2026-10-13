@@ -25,8 +25,10 @@ module {
   "onnx.EntryPoint"() {func = @gather_nd_batch1} : () -> ()
 }
 // CHECK-LABEL: func.func @main(%arg0: tensor<2x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<2x2x4xf32>{{( \{[^}]*\})?}})
-// CHECK: arith.constant {{.*}} : tensor<2x2x2xi32>
-// CHECK: "tfl.gather_nd"(%arg0, {{.*}}) : (tensor<2x3x4xf32>, tensor<2x2x2xi32>) -> tensor<2x2x4xf32>
+// CHECK: arith.constant dense<[0, 2, 4, 3]> : tensor<4xi32>
+// CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<2x3x4xf32>, tensor<2xi32>) -> tensor<6x4xf32>
+// CHECK: "tfl.gather"{{.*}} {axis = 0 : i32, batch_dims = 0 : i32} : (tensor<6x4xf32>, tensor<4xi32>) -> tensor<4x4xf32>
+// CHECK: "tfl.reshape"{{.*}} -> tensor<2x2x4xf32>
 
 // -----
 
@@ -40,7 +42,9 @@ module {
 }
 // CHECK-LABEL: func.func @main(%arg0: tensor<2x4x5x3xf32>{{( \{[^}]*\})?}}) -> (tensor<3x4x5xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<2x4x5x3xf32>, tensor<4xi32>) -> tensor<2x3x4x5xf32>
-// CHECK: "tfl.gather_nd"({{.*}}, {{.*}}) : (tensor<2x3x4x5xf32>, tensor<3x2xi32>) -> tensor<3x4x5xf32>
+// CHECK: "tfl.reshape"{{.*}} -> tensor<6x20xf32>
+// CHECK: "tfl.gather"{{.*}} {axis = 0 : i32, batch_dims = 0 : i32} : (tensor<6x20xf32>, tensor<3xi32>) -> tensor<3x20xf32>
+// CHECK: "tfl.reshape"{{.*}} -> tensor<3x4x5xf32>
 
 // -----
 
@@ -53,8 +57,10 @@ module {
   "onnx.EntryPoint"() {func = @gather_nd_rank5_to_rank4} : () -> ()
 }
 // CHECK-LABEL: func.func @main(%arg0: tensor<2x3x2x4x5xf32>{{( \{[^}]*\})?}}) -> (tensor<2x4x5x2xf32>{{( \{[^}]*\})?}})
-// CHECK: arith.constant {{.*}} : tensor<2x2x3xi32>
-// CHECK: "tfl.gather_nd"(%arg0, {{.*}}) : (tensor<2x3x2x4x5xf32>, tensor<2x2x3xi32>) -> tensor<2x2x4x5xf32>
+// CHECK: arith.constant dense<[1, 4, 8, 11]> : tensor<4xi32>
+// CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<2x3x2x4x5xf32>, tensor<2xi32>) -> tensor<12x20xf32>
+// CHECK: "tfl.gather"{{.*}} {axis = 0 : i32, batch_dims = 0 : i32} : (tensor<12x20xf32>, tensor<4xi32>) -> tensor<4x20xf32>
+// CHECK: "tfl.reshape"{{.*}} -> tensor<2x2x4x5xf32>
 // CHECK: "tfl.transpose"({{.*}}) : (tensor<2x2x4x5xf32>, tensor<4xi32>) -> tensor<2x4x5x2xf32>
 
 // -----

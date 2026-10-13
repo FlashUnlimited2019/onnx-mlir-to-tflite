@@ -39,6 +39,7 @@ public:
 };
 
 void populateONNXToTFLPreprocessingPatterns(mlir::RewritePatternSet &);
+void rewriteONNXToTFLStaticPaddedNMS(mlir::ModuleOp);
 void populateONNXToTFLStaticUpdatePreprocessingPatterns(
     mlir::RewritePatternSet &);
 void populateONNXToTFLTransformerPreprocessingPatterns(
@@ -81,6 +82,8 @@ void populateLoweringONNXIndexedMaxPoolOpToTFLPatterns(
 void populateLoweringONNXAveragePoolOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);
 void populateLoweringONNXAttentionOpToTFLPatterns(
+    mlir::RewritePatternSet &, mlir::TypeConverter &);
+void populateLoweringONNXContribOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);
 void populateLoweringONNXBatchNormalizationOpToTFLPatterns(
     mlir::RewritePatternSet &, mlir::TypeConverter &);

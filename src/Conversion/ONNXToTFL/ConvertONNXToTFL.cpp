@@ -60,11 +60,16 @@ bool isSupportedONNXOperation(Operation *op) {
            if (!custom)
              return false;
            auto domain = candidate->getAttrOfType<StringAttr>("domain_name");
-           if (!domain || domain.getValue() != "com.microsoft")
+           if (!domain)
              return false;
            StringRef name = custom.getFunctionName();
+           if (domain.getValue().empty())
+             return name == "SimplifiedLayerNormalization";
+           if (domain.getValue() != "com.microsoft")
+             return false;
            return name == "Attention" || name == "MultiHeadAttention" ||
-                  name == "GroupQueryAttention";
+                  name == "GroupQueryAttention" || name == "RotaryEmbedding" ||
+                  name == "SkipSimplifiedLayerNormalization";
          })(op);
 }
 
@@ -311,7 +316,14 @@ public:
       return;
     }
 
+    // Fuse bounded consumers before generic folding can specialize stale
+    // value_info shapes on data-dependent NMS intermediates.
+    rewriteONNXToTFLStaticPaddedNMS(module);
     RewritePatternSet preprocessingPatterns(&getContext());
+    // Also accept direct ONNX-dialect input without an importer optimization
+    // pipeline. The static canonicalizer keeps GroupNormalization at low rank.
+    ONNXGroupNormalizationOp::getCanonicalizationPatterns(
+        preprocessingPatterns, &getContext());
     populateONNXToTFLPreprocessingPatterns(preprocessingPatterns);
     populateONNXToTFLStaticUpdatePreprocessingPatterns(preprocessingPatterns);
     populateONNXToTFLTransformerPreprocessingPatterns(preprocessingPatterns);
@@ -403,6 +415,7 @@ public:
     populateLoweringONNXIndexedMaxPoolOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXAveragePoolOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXAttentionOpToTFLPatterns(patterns, typeConverter);
+    populateLoweringONNXContribOpToTFLPatterns(patterns, typeConverter);
     populateLoweringONNXBatchNormalizationOpToTFLPatterns(
         patterns, typeConverter);
     populateLoweringONNXLayerNormalizationOpToTFLPatterns(

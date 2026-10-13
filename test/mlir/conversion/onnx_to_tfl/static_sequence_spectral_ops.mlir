@@ -97,7 +97,7 @@ module {
 }
 
 // CHECK-LABEL: func.func @main
-// CHECK: "tfl.gather_nd"
+// CHECK: "tfl.gather"{{.*}} {axis = 0 : i32, batch_dims = 0 : i32}
 // CHECK: "tfl.mul"
 // CHECK: "tfl.reduce_max"
 // CHECK-NOT: onnx.

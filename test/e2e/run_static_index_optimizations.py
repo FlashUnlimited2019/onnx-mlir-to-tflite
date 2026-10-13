@@ -337,6 +337,95 @@ def command(args):
         raise RuntimeError(result.stdout + result.stderr)
 
 
+def bounded_index_cases(graph):
+    # Runtime indices are nonnegative, but only safe additions and casts may
+    # inherit that fact. Integer inputs avoid cross-runtime NaN tie policies.
+    data = graph.input((3, 7), np.int32)
+    for kind in ("arg_max", "arg_min"):
+        reduce = np.argmax if kind == "arg_max" else np.argmin
+        for axis in (0, 1, -1):
+            shape = (7,) if axis == 0 else (3,)
+            for dtype in (np.int32, np.int64):
+                indices = graph.op(
+                    kind,
+                    [data, graph.constant(axis)],
+                    shape,
+                    dtype,
+                    lambda x, a, fn=reduce, t=dtype: fn(x, axis=int(a)).astype(t),
+                )
+                column = graph.reshape(indices, (shape[0], 1))
+                offset = graph.constant([[0, 13]], dtype)
+                shifted = graph.op(
+                    "add",
+                    [column, offset],
+                    (shape[0], 2),
+                    dtype,
+                    np.add,
+                    'fused_activation_function = "NONE"',
+                )
+                merged = graph.concat([column, shifted], 1)
+                narrowed = graph.op(
+                    "cast",
+                    [merged],
+                    merged.shape,
+                    np.int32,
+                    lambda x: x.astype(np.int32),
+                )
+                for value in (indices, shifted, merged, narrowed):
+                    negative = graph.op(
+                        "less",
+                        [value, graph.constant(0, value.dtype)],
+                        value.shape,
+                        np.bool_,
+                        np.less,
+                    )
+                    graph.output(negative)
+                    graph.cases += 1
+                safe_offset = np.iinfo(dtype).max - (data.shape[axis] - 1)
+                at_limit = graph.op(
+                    "add",
+                    [indices, graph.constant(safe_offset, dtype)],
+                    shape,
+                    dtype,
+                    np.add,
+                    'fused_activation_function = "NONE"',
+                )
+                negative = graph.op(
+                    "less",
+                    [at_limit, graph.constant(0, dtype)],
+                    shape,
+                    np.bool_,
+                    np.less,
+                )
+                graph.output(negative)
+                graph.cases += 1
+                if dtype == np.int64:
+                    # A nonnegative i64 index can become negative after an i32
+                    # cast. The comparison must remain and evaluate to true.
+                    large = graph.op(
+                        "add",
+                        [indices, graph.constant(2**31, np.int64)],
+                        shape,
+                        np.int64,
+                        np.add,
+                        'fused_activation_function = "NONE"',
+                    )
+                    narrow = graph.op(
+                        "cast", [large], shape, np.int32, lambda x: x.astype(np.int32)
+                    )
+                    negative = graph.op(
+                        "less", [narrow, graph.constant(0)], shape, np.bool_, np.less
+                    )
+                    graph.output(negative)
+                    graph.cases += 1
+    unknown = graph.input((9,), np.int64)
+    negative = graph.op(
+        "less", [unknown, graph.constant(0, np.int64)], (9,), np.bool_, np.less
+    )
+    graph.output(negative)
+    graph.cases += 1
+
+
 def main():
     repo = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -355,6 +444,7 @@ def main():
     constant_cases(graph)
     window_cases(graph)
     mask_cases(graph)
+    bounded_index_cases(graph)
     with tempfile.TemporaryDirectory(
         prefix="static-index-", dir=args.work_dir
     ) as directory:

@@ -133,6 +133,132 @@ FailureOr<int64_t> getConcatAxis(Operation *op) {
                                         : FailureOr<int64_t>(failure());
 }
 
+// Prove a nonnegative signed-integer range, not merely a nonnegative source.
+// In particular, addition and narrowing casts must not wrap into negatives.
+// Unknown operations, excessive work, and incomplete shape proofs bail out.
+std::optional<int64_t> nonnegativeUpperBound(
+    Value value, unsigned depth, int64_t &work) {
+  auto info = getInfo(value);
+  if (!info || depth == 0 || work-- <= 0 ||
+      (!info->type.getElementType().isSignlessInteger(32) &&
+          !info->type.getElementType().isSignlessInteger(64)))
+    return std::nullopt;
+  int64_t maximum = info->type.getElementType().isInteger(32)
+                        ? std::numeric_limits<int32_t>::max()
+                        : std::numeric_limits<int64_t>::max();
+  if (auto constant = getIntegerConstant(value)) {
+    int64_t count = constant.isSplat() ? 1 : info->elements;
+    if (count > work)
+      return std::nullopt;
+    work -= count;
+    int64_t bound = 0;
+    for (APInt element : constant.getValues<APInt>()) {
+      if (element.isNegative())
+        return std::nullopt;
+      bound = std::max(bound, element.getSExtValue());
+      if (constant.isSplat())
+        break;
+    }
+    return bound;
+  }
+  Operation *op = value.getDefiningOp();
+  if (!op || op->getNumResults() != 1 || op->getNumRegions() != 0 ||
+      op->getNumSuccessors() != 0)
+    return std::nullopt;
+  StringRef name = op->getName().getStringRef();
+  auto read = [&](Value input) {
+    return nonnegativeUpperBound(input, depth - 1, work);
+  };
+  if ((name == "tfl.arg_max" || name == "tfl.arg_min") &&
+      op->getNumOperands() == 2) {
+    auto input = getInfo(op->getOperand(0));
+    auto axis = getIntegerConstant(op->getOperand(1));
+    if (!input || !axis || axis.getNumElements() != 1 ||
+        axis.getElementType().isInteger(1) ||
+        (!input->type.getElementType().isF32() &&
+            !input->type.getElementType().isSignlessInteger(32)))
+      return std::nullopt;
+    int64_t dim = (*axis.getValues<APInt>().begin()).getSExtValue();
+    int64_t rank = input->type.getRank();
+    if (dim < -rank || dim >= rank)
+      return std::nullopt;
+    if (dim < 0)
+      dim += rank;
+    SmallVector<int64_t> expected(input->shape());
+    int64_t bound = expected[dim] - 1;
+    expected.erase(expected.begin() + dim);
+    if (bound > maximum || !llvm::equal(expected, info->shape()))
+      return std::nullopt;
+    return bound;
+  }
+  if (name == "tfl.reshape" && op->getNumOperands() == 2) {
+    auto input = getInfo(op->getOperand(0));
+    auto shape = getIndexVector(op->getOperand(1));
+    if (!input || input->elements != info->elements ||
+        input->type.getElementType() != info->type.getElementType() ||
+        failed(shape) || !llvm::equal(*shape, info->shape()))
+      return std::nullopt;
+    return read(op->getOperand(0));
+  }
+  if (name == "tfl.cast" && op->getNumOperands() == 1) {
+    auto input = getInfo(op->getOperand(0));
+    if (!input || input->shape() != info->shape())
+      return std::nullopt;
+    auto bound = read(op->getOperand(0));
+    return bound && *bound <= maximum ? bound : std::nullopt;
+  }
+  if (name == "tfl.add" && op->getNumOperands() == 2 && hasNoActivation(op) &&
+      matchesBroadcast(op->getOperands(), info->type)) {
+    for (Value input : op->getOperands())
+      if (cast<RankedTensorType>(input.getType()).getElementType() !=
+          info->type.getElementType())
+        return std::nullopt;
+    auto left = read(op->getOperand(0)), right = read(op->getOperand(1));
+    if (!left || !right || *left > maximum - *right)
+      return std::nullopt;
+    return *left + *right;
+  }
+  if (name == "tfl.concatenation" && succeeded(getConcatAxis(op))) {
+    int64_t bound = 0;
+    for (Value input : op->getOperands()) {
+      auto part = read(input);
+      if (!part)
+        return std::nullopt;
+      bound = std::max(bound, *part);
+    }
+    return bound;
+  }
+  return std::nullopt;
+}
+
+class FoldNonnegativeIndexCheck final : public RewritePattern {
+public:
+  explicit FoldNonnegativeIndexCheck(MLIRContext *context)
+      : RewritePattern("tfl.less", 4, context) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() != 2 || op->getNumResults() != 1 ||
+        op->getNumRegions() != 0 || op->getNumSuccessors() != 0)
+      return failure();
+    auto result = getInfo(op->getResult(0));
+    auto input = getInfo(op->getOperand(0));
+    auto zero = getIntegerConstant(op->getOperand(1));
+    if (!result || !input || !zero || !zero.isSplat() ||
+        !zero.getSplatValue<APInt>().isZero() ||
+        zero.getElementType() != input->type.getElementType() ||
+        !result->type.getElementType().isInteger(1) ||
+        !matchesBroadcast(op->getOperands(), result->type))
+      return failure();
+    int64_t work = 4096;
+    if (!nonnegativeUpperBound(op->getOperand(0), 16, work))
+      return failure();
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, result->type,
+        DenseIntElementsAttr::get(result->type, ArrayRef<bool>{false}));
+    return success();
+  }
+};
+
 struct SliceWindow {
   SmallVector<int64_t> begin, size, step;
 };
@@ -476,10 +602,108 @@ bool isIndexRoot(Operation *op) {
       .Cases({"tfl.tile", "tfl.reshape", "tfl.add", "tfl.cast", "tfl.less",
                  "tfl.select_v2", "tfl.concatenation", "tfl.slice",
                  "tfl.strided_slice", "tfl.broadcast_to", "tfl.transpose",
-                 "tfl.reverse_v2"},
+                 "tfl.reverse_v2", "tfl.gather_nd"},
           true)
       .Default(false);
 }
+
+// Constant, possibly irregular coordinates can be linearized at compile time.
+// Keep dynamic coordinates on the original path: a flat offset alone would
+// not preserve per-axis bounds checking. The runtime gather reads a rank-2
+// matrix using rank-1 indices and preserves duplicates and their ordering.
+class FlattenConstantGatherND final : public RewritePattern {
+public:
+  explicit FlattenConstantGatherND(MLIRContext *context)
+      : RewritePattern("tfl.gather_nd", 3, context) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() != 2 || op->getNumResults() != 1 ||
+        op->getNumRegions() || op->getNumSuccessors())
+      return failure();
+    auto data = getInfo(op->getOperand(0));
+    auto indices = getInfo(op->getOperand(1));
+    auto result = getInfo(op->getResult(0));
+    auto constant = getIntegerConstant(op->getOperand(1));
+    if (!data || !indices || !result || !constant ||
+        !data->type.getElementType().isF32() ||
+        result->type.getElementType() != data->type.getElementType() ||
+        indices->type.getElementType().isInteger(1) ||
+        data->type.getRank() > 5 || result->type.getRank() > 5 ||
+        indices->type.getRank() < 1 || indices->elements > maxElements)
+      return failure();
+    int64_t depth = indices->shape().back();
+    if (depth < 2 || depth > data->type.getRank())
+      return failure();
+    SmallVector<int64_t> expected(indices->shape().drop_back());
+    llvm::append_range(expected, data->shape().drop_front(depth));
+    if (!llvm::equal(expected, result->shape()))
+      return failure();
+    int64_t rows = 1, tuples = indices->elements / depth;
+    for (int64_t dim : data->shape().take_front(depth))
+      rows *= dim; // getInfo already checked the full element count.
+    int64_t columns = data->elements / rows;
+    if (rows > std::numeric_limits<int32_t>::max() ||
+        columns > std::numeric_limits<int32_t>::max() ||
+        tuples > std::numeric_limits<int32_t>::max())
+      return failure();
+    SmallVector<int32_t> offsets;
+    offsets.reserve(tuples);
+    auto values = constant.getValues<APInt>();
+    auto it = values.begin();
+    for (int64_t t = 0; t < tuples; ++t) {
+      int64_t offset = 0;
+      for (int64_t d = 0; d < depth; ++d, ++it) {
+        int64_t index = (*it).getSExtValue();
+        // Unlike ONNX, TFL coordinates must already be nonnegative.
+        if (index < 0 || index >= data->shape()[d])
+          return failure();
+        offset = offset * data->shape()[d] + index;
+      }
+      offsets.push_back(static_cast<int32_t>(offset));
+    }
+    auto i32 = rewriter.getI32Type();
+    auto create = [&](StringRef name, Type type, ValueRange operands,
+                      ArrayRef<NamedAttribute> attrs = {}) -> Value {
+      OperationState state(op->getLoc(), name);
+      state.addTypes(type);
+      state.addOperands(operands);
+      state.addAttributes(attrs);
+      return rewriter.create(state)->getResult(0);
+    };
+    auto reshape = [&](Value value, RankedTensorType type) -> Value {
+      if (value.getType() == type)
+        return value;
+      SmallVector<int32_t> shape;
+      for (int64_t dim : type.getShape())
+        shape.push_back(static_cast<int32_t>(dim));
+      auto shapeType = RankedTensorType::get({type.getRank()}, i32);
+      Value shapeValue =
+          arith::ConstantOp::create(rewriter, op->getLoc(), shapeType,
+              DenseIntElementsAttr::get(shapeType, ArrayRef<int32_t>(shape)));
+      return create("tfl.reshape", type, {value, shapeValue});
+    };
+    for (int64_t dim : result->shape())
+      if (dim > std::numeric_limits<int32_t>::max())
+        return failure();
+    auto matrixType =
+        RankedTensorType::get({rows, columns}, rewriter.getF32Type());
+    auto gatheredType =
+        RankedTensorType::get({tuples, columns}, rewriter.getF32Type());
+    auto offsetType = RankedTensorType::get({tuples}, i32);
+    Value offsetsValue =
+        arith::ConstantOp::create(rewriter, op->getLoc(), offsetType,
+            DenseIntElementsAttr::get(offsetType, ArrayRef<int32_t>(offsets)));
+    Value matrix = reshape(op->getOperand(0), matrixType);
+    SmallVector<NamedAttribute> attrs{
+        rewriter.getNamedAttr("axis", rewriter.getI32IntegerAttr(0)),
+        rewriter.getNamedAttr("batch_dims", rewriter.getI32IntegerAttr(0))};
+    Value gathered =
+        create("tfl.gather", gatheredType, {matrix, offsetsValue}, attrs);
+    rewriter.replaceOp(op, reshape(gathered, result->type));
+    return success();
+  }
+};
 
 class FoldIntegerIndex final : public RewritePattern {
 public:
@@ -633,8 +857,8 @@ LogicalResult optimizeTFLStaticIndexOperations(ModuleOp module) {
   RewritePatternSet patterns(module.getContext());
   patterns.add<FoldIntegerIndex, FoldUniformSelect>(
       module.getContext(), budget);
-  patterns.add<SimplifyConcatSlice, EraseDeadIndexOperation>(
-      module.getContext());
+  patterns.add<FoldNonnegativeIndexCheck, SimplifyConcatSlice,
+      FlattenConstantGatherND, EraseDeadIndexOperation>(module.getContext());
   SmallVector<Operation *> roots;
   module.walk([&](Operation *op) {
     if (isIndexRoot(op))

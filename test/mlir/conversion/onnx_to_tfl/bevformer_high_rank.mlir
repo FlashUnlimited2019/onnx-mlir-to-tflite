@@ -29,10 +29,8 @@ module {
 }
 
 // CHECK-LABEL: func.func @main(%arg0: tensor<1x1x1x1x1xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x1x1x1x1xf32>{{( \{[^}]*\})?}})
-// CHECK: arith.constant dense<0> : tensor<1x5xi32>
-// CHECK: %[[UPDATES:.*]] = "tfl.reshape"(%arg1, {{.*}}) : (tensor<1x1x1x1x1xf32>, tensor<1xi32>) -> tensor<1xf32>
-// CHECK: "tfl.gather_nd"(%arg0, {{.*}}) : (tensor<1x1x1x1x1xf32>, tensor<1x5xi32>) -> tensor<1xf32>
-// CHECK: "tfl.scatter_nd"{{.*}} : (tensor<1x5xi32>, tensor<1xf32>, tensor<5xi32>) -> tensor<1x1x1x1x1xf32>
+// CHECK-NOT: "tfl.
+// CHECK: return %arg1 : tensor<1x1x1x1x1xf32>
 // CHECK-NOT: onnx.
 
 // -----

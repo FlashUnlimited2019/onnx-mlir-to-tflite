@@ -9,6 +9,8 @@
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
 
 #include <algorithm>
+#include <limits>
+#include <optional>
 
 using namespace mlir;
 
@@ -101,6 +103,237 @@ FailureOr<Value> createStaticSliceUpdate(PatternRewriter &rewriter,
       rewriter, loc, resultType, pieces, rewriter.getI64IntegerAttr(axis))
       .getResult();
 }
+
+// Bound compile-time inspection; exceeding this budget is not a model error.
+constexpr int64_t maxGridCoordinates = 1024 * 1024;
+
+std::optional<int64_t> staticElementCount(RankedTensorType type) {
+  if (!type || !type.hasStaticShape() || type.getEncoding())
+    return std::nullopt;
+  int64_t count = 1;
+  for (int64_t dim : type.getShape()) {
+    if (dim <= 0 || dim > std::numeric_limits<int32_t>::max() ||
+        count > std::numeric_limits<int64_t>::max() / dim)
+      return std::nullopt;
+    count *= dim;
+  }
+  return count;
+}
+
+struct GridSlice {
+  SmallVector<int64_t> shape;
+  int64_t axis = -1; // -1 denotes complete coverage, including trailing slices.
+  int64_t start = 0;
+};
+
+// Prove that the coordinates enumerate a single-axis slab in row-major order.
+// Checking both the bounds and every tuple rejects holes, duplicates, shuffled
+// updates, and multi-axis subregions. Unindexed trailing dimensions are copied
+// as complete slices. No tensor values or floating-point identities are used.
+std::optional<GridSlice> matchGridSlice(
+    RankedTensorType dataType, Value indices, RankedTensorType valuesType) {
+  auto indicesType = dyn_cast<RankedTensorType>(indices.getType());
+  auto dataCount = staticElementCount(dataType);
+  auto indexCount = staticElementCount(indicesType);
+  auto valueCount = staticElementCount(valuesType);
+  if (!dataCount || !indexCount || !valueCount || dataType.getRank() < 1 ||
+      dataType.getRank() > 5 || indicesType.getRank() < 1 ||
+      indicesType.getRank() > 6 || valuesType.getRank() < 1 ||
+      valuesType.getRank() > 5 || !dataType.getElementType().isF32() ||
+      valuesType.getElementType() != dataType.getElementType() ||
+      (!indicesType.getElementType().isSignlessInteger(32) &&
+          !indicesType.getElementType().isSignlessInteger(64)) ||
+      *indexCount > maxGridCoordinates)
+    return std::nullopt;
+
+  int64_t depth = indicesType.getShape().back();
+  if (depth < 1 || depth > dataType.getRank())
+    return std::nullopt;
+  SmallVector<int64_t> expected(indicesType.getShape().drop_back());
+  llvm::append_range(expected, dataType.getShape().drop_front(depth));
+  if (!llvm::equal(expected, valuesType.getShape()))
+    return std::nullopt;
+  auto coordinates = getConstantIntValues(indices);
+  if (failed(coordinates) ||
+      static_cast<int64_t>(coordinates->size()) != *indexCount)
+    return std::nullopt;
+
+  int64_t tuples = *indexCount / depth;
+  SmallVector<int64_t> lower(dataType.getShape().take_front(depth));
+  SmallVector<int64_t> upper(depth, -1);
+  for (int64_t t = 0; t < tuples; ++t) {
+    for (int64_t d = 0; d < depth; ++d) {
+      int64_t &index = (*coordinates)[t * depth + d];
+      if (index < 0)
+        index += dataType.getShape()[d];
+      if (index < 0 || index >= dataType.getShape()[d])
+        return std::nullopt;
+      lower[d] = std::min(lower[d], index);
+      upper[d] = std::max(upper[d], index);
+    }
+  }
+  GridSlice grid{SmallVector<int64_t>(dataType.getShape())};
+  int64_t expectedTuples = 1;
+  for (int64_t d = 0; d < depth; ++d) {
+    int64_t extent = upper[d] - lower[d] + 1;
+    if (extent != dataType.getShape()[d]) {
+      if (grid.axis != -1)
+        return std::nullopt;
+      grid.axis = d;
+      grid.start = lower[d];
+    }
+    grid.shape[d] = extent;
+    // The product cannot exceed the already checked input element count.
+    expectedTuples *= extent;
+  }
+  if (expectedTuples != tuples)
+    return std::nullopt;
+  for (int64_t t = 0; t < tuples; ++t) {
+    int64_t remaining = t;
+    for (int64_t d = depth; d-- > 0;) {
+      int64_t expectedIndex = lower[d] + remaining % grid.shape[d];
+      remaining /= grid.shape[d];
+      if ((*coordinates)[t * depth + d] != expectedIndex)
+        return std::nullopt;
+    }
+  }
+  return grid;
+}
+
+Value reshapeStatic(PatternRewriter &rewriter, Location loc, Value value,
+    RankedTensorType type) {
+  if (value.getType() == type)
+    return value;
+  MultiDialectBuilder<OnnxBuilder> create(rewriter, loc);
+  Value shape = create.onnx.constantInt64(type.getShape());
+  return ONNXReshapeOp::create(rewriter, loc, type, value, shape);
+}
+
+class ScatterNDGridSlicePattern final
+    : public OpRewritePattern<ONNXScatterNDOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXScatterNDOp op, PatternRewriter &rewriter) const override {
+    auto dataType = dyn_cast<RankedTensorType>(op.getData().getType());
+    auto updatesType = dyn_cast<RankedTensorType>(op.getUpdates().getType());
+    if (!dataType || op.getType() != dataType || op.getReduction() != "none")
+      return failure();
+    auto grid = matchGridSlice(dataType, op.getIndices(), updatesType);
+    if (!grid)
+      return failure();
+    auto slabType =
+        RankedTensorType::get(grid->shape, dataType.getElementType());
+    Value updates =
+        reshapeStatic(rewriter, op.getLoc(), op.getUpdates(), slabType);
+    if (grid->axis == -1) {
+      rewriter.replaceOp(op, updates);
+      return success();
+    }
+    // Match before lowering: replacing x + (u - x) by u on an arbitrary TFL
+    // graph is not a valid floating-point rewrite. ONNX overwrite semantics
+    // instead permit direct copies, including NaNs and signed zeros.
+    auto replacement =
+        createStaticSliceUpdate(rewriter, op.getLoc(), op.getData(), updates,
+            dataType, slabType, dataType, grid->axis, grid->start);
+    assert(succeeded(replacement) && "validated slab must fit the input");
+    rewriter.replaceOp(op, *replacement);
+    return success();
+  }
+};
+
+class GatherNDGridSlicePattern final : public OpRewritePattern<ONNXGatherNDOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXGatherNDOp op, PatternRewriter &rewriter) const override {
+    if (op.getBatchDims() != 0)
+      return failure();
+    auto dataType = dyn_cast<RankedTensorType>(op.getData().getType());
+    auto resultType = dyn_cast<RankedTensorType>(op.getType());
+    auto grid = matchGridSlice(dataType, op.getIndices(), resultType);
+    if (!grid)
+      return failure();
+    Value value = op.getData();
+    if (grid->axis != -1)
+      value = createStaticSlice(rewriter, op.getLoc(), value, dataType,
+          grid->axis, grid->start, grid->start + grid->shape[grid->axis]);
+    rewriter.replaceOp(
+        op, reshapeStatic(rewriter, op.getLoc(), value, resultType));
+    return success();
+  }
+};
+
+// A slice wholly contained in one concatenation operand does not need the
+// other operands. This also removes redundant repeated slab overwrites without
+// assuming that intermediate tensors have no other users.
+class SliceConcatOperandPattern final : public OpRewritePattern<ONNXSliceOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXSliceOp op, PatternRewriter &rewriter) const override {
+    auto concat = op.getData().getDefiningOp<ONNXConcatOp>();
+    auto dataType = dyn_cast<RankedTensorType>(op.getData().getType());
+    auto resultType = dyn_cast<RankedTensorType>(op.getType());
+    if (!concat || !staticElementCount(dataType) ||
+        !staticElementCount(resultType) || dataType.getRank() < 1 ||
+        dataType.getRank() > 5 || resultType.getRank() != dataType.getRank() ||
+        dataType.getElementType() != resultType.getElementType())
+      return failure();
+    auto starts = getConstantIntValues(op.getStarts());
+    auto ends = getConstantIntValues(op.getEnds());
+    auto axes = getConstantIntValues(op.getAxes());
+    auto steps = getConstantIntValues(op.getSteps());
+    if (failed(starts) || failed(ends) || failed(axes) || failed(steps) ||
+        starts->size() != 1 || ends->size() != 1 || axes->size() != 1 ||
+        steps->size() != 1 || (*steps)[0] != 1)
+      return failure();
+    int64_t rank = dataType.getRank();
+    int64_t axis = (*axes)[0], concatAxis = concat.getAxis();
+    if (axis < -rank || axis >= rank || concatAxis < -rank ||
+        concatAxis >= rank)
+      return failure();
+    axis = normalizeAxis(axis, rank);
+    if (axis != normalizeAxis(concatAxis, rank))
+      return failure();
+    int64_t start = (*starts)[0], end = (*ends)[0];
+    if (start < 0 || end <= start || end > dataType.getShape()[axis] ||
+        resultType != getSliceType(dataType, axis, end - start))
+      return failure();
+    int64_t offset = 0, selectedStart = 0;
+    Value selected;
+    for (Value part : concat.getOperands()) {
+      auto partType = dyn_cast<RankedTensorType>(part.getType());
+      if (!staticElementCount(partType) || partType.getRank() != rank ||
+          partType.getElementType() != dataType.getElementType())
+        return failure();
+      for (int64_t d = 0; d < rank; ++d)
+        if (d != axis && partType.getShape()[d] != dataType.getShape()[d])
+          return failure();
+      int64_t extent = partType.getShape()[axis];
+      if (extent > dataType.getShape()[axis] - offset)
+        return failure();
+      if (start >= offset && end <= offset + extent) {
+        selected = part;
+        selectedStart = start - offset;
+      }
+      offset += extent;
+    }
+    if (!selected || offset != dataType.getShape()[axis])
+      return failure();
+    if (selected.getType() == resultType && selectedStart == 0)
+      rewriter.replaceOp(op, selected);
+    else
+      rewriter.replaceOp(
+          op, createStaticSlice(rewriter, op.getLoc(), selected,
+                  cast<RankedTensorType>(selected.getType()), axis,
+                  selectedStart, selectedStart + end - start));
+    return success();
+  }
+};
 
 // Recognize a static contiguous update that was exported by moving the
 // updated dimension to the front, applying ScatterND, and restoring the
@@ -295,7 +528,9 @@ public:
 void populateONNXToTFLStaticUpdatePreprocessingPatterns(
     RewritePatternSet &patterns) {
   patterns.add<TransposedScatterNDSliceUpdatePattern,
-      ScatterElementsSliceUpdatePattern>(patterns.getContext());
+      ScatterElementsSliceUpdatePattern, ScatterNDGridSlicePattern,
+      GatherNDGridSlicePattern, SliceConcatOperandPattern>(
+      patterns.getContext());
 }
 
 } // namespace onnx_mlir

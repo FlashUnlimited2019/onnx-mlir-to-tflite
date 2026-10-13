@@ -50,6 +50,6 @@ module {
 }
 
 // CHECK-LABEL: func.func @main
-// CHECK: "tfl.gather_nd"
+// CHECK: "tfl.gather"
 // CHECK: "tfl.scatter_nd"
 // CHECK-NOT: onnx.

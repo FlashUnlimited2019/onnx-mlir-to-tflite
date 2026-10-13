@@ -2,9 +2,8 @@
 
 // RUN: onnx-mlir-opt --convert-onnx-to-tfl --verify-each %s -split-input-file | FileCheck %s
 
-// LightStereo builds its cost volume with chained full-coordinate ScatterND
-// updates. The lowering restores logical NCHW locally and implements exact
-// overwrite semantics as data + ScatterND(updates - GatherND(data)).
+// A full-coordinate grid overwrites one complete channel. Recognize the
+// source overwrite semantics and copy values without floating arithmetic.
 module {
   func.func @scatter_nd_rank4(%data: tensor<1x2x2x3xf32>, %updates: tensor<1x1x2x3xf32>) -> tensor<1x2x2x3xf32> {
     %indices = "onnx.Constant"() {value = dense<[[[[[0, 1, 0, 0], [0, 1, 0, 1], [0, 1, 0, 2]], [[0, 1, 1, 0], [0, 1, 1, 1], [0, 1, 1, 2]]]]]> : tensor<1x1x2x3x4xi64>} : () -> tensor<1x1x2x3x4xi64>
@@ -15,14 +14,9 @@ module {
 }
 
 // CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x2xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x2x3x1xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x2xf32>{{( \{[^}]*\})?}})
-// CHECK: arith.constant dense<{{.*}}> : tensor<1x1x2x3x4xi32>
-// CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<1x2x3x2xf32>, tensor<4xi32>) -> tensor<1x2x2x3xf32>
-// CHECK: "tfl.transpose"(%arg1, {{.*}}) : (tensor<1x2x3x1xf32>, tensor<4xi32>) -> tensor<1x1x2x3xf32>
-// CHECK: "tfl.gather_nd"
-// CHECK: "tfl.sub"
-// CHECK: "tfl.scatter_nd"
-// CHECK: "tfl.add"
-// CHECK: "tfl.transpose"
+// CHECK: %[[PREFIX:.*]] = "tfl.slice"(%arg0, {{.*}}) : (tensor<1x2x3x2xf32>, tensor<4xi32>, tensor<4xi32>) -> tensor<1x2x3x1xf32>
+// CHECK-NEXT: %[[RESULT:.*]] = "tfl.concatenation"(%[[PREFIX]], %arg1) {axis = 3 : i32, fused_activation_function = "NONE"}
+// CHECK-NEXT: return %[[RESULT]]
 // CHECK-NOT: onnx.
 
 // -----

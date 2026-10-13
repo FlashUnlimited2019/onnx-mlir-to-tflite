@@ -5,6 +5,7 @@
 //===----------- ONNXRewrite.cpp - ONNX High Level Optimizer --------------===//
 //
 // Copyright 2019-2026 The IBM Research Authors.
+// Modified by FlashUnlimited2019 in 2026.
 //
 // =============================================================================
 //
@@ -16,6 +17,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <cmath>
+#include <limits>
 #include <math.h>
 
 #include "mlir/IR/Matchers.h"
@@ -2406,12 +2409,74 @@ LogicalResult ONNXGroupNormalizationCommon(
   return success();
 }
 
+// Keep static FP32 normalization row-wise and apply the per-channel affine
+// transform separately. Splitting C into [G, C/G] otherwise raises the rank
+// and couples the affine broadcast shape to the normalization axes.
+LogicalResult rewriteStaticGroupNormalization(
+    ONNXGroupNormalizationOp op, PatternRewriter &rewriter) {
+  auto inputType = cast<RankedTensorType>(op.getX().getType());
+  auto scaleType = dyn_cast<RankedTensorType>(op.getScale().getType());
+  auto biasType = dyn_cast<RankedTensorType>(op.getBias().getType());
+  int64_t rank = inputType.getRank();
+  int64_t groups = op.getNumGroups();
+  float epsilon = op.getEpsilon().convertToFloat();
+  if (rank < 2 || rank > 5 || groups <= 0 || op.getStashType() != 1 ||
+      !std::isfinite(epsilon) || epsilon < 0 ||
+      op.getY().getType() != inputType || !scaleType || !biasType ||
+      scaleType != biasType || scaleType.getRank() != 1 ||
+      !scaleType.getElementType().isF32())
+    return rewriter.notifyMatchFailure(op,
+        "requires static rank-2 through "
+        "rank-5 FP32, matching per-channel scale/bias, stash_type=1, "
+        "positive dividing groups, and finite nonnegative epsilon");
+  int64_t count = 1;
+  for (int64_t dim : inputType.getShape()) {
+    if (dim <= 0 || dim > std::numeric_limits<int32_t>::max() / count)
+      return rewriter.notifyMatchFailure(
+          op, "invalid or oversized static shape");
+    count *= dim;
+  }
+  int64_t batch = inputType.getShape()[0];
+  int64_t channels = inputType.getShape()[1];
+  if (channels % groups || scaleType.getShape()[0] != channels)
+    return rewriter.notifyMatchFailure(
+        op, "invalid channel/group/parameter shape");
+  int64_t spatial = count / batch / channels;
+  int64_t rows = batch * groups;
+  int64_t width = count / rows;
+  OnnxBuilder create(rewriter, op.getLoc());
+  auto tensor = [&](ArrayRef<int64_t> shape) {
+    return RankedTensorType::get(shape, rewriter.getF32Type());
+  };
+  auto reshape = [&](Value value, ArrayRef<int64_t> shape) {
+    return create.reshape(tensor(shape), value, create.constantInt64(shape));
+  };
+  Value matrix = reshape(op.getX(), {rows, width});
+  auto parameterType = tensor({width});
+  Value one = create.constant(
+      DenseElementsAttr::get(parameterType, rewriter.getF32FloatAttr(1.0f)));
+  Value zero = create.constant(
+      DenseElementsAttr::get(parameterType, rewriter.getF32FloatAttr(0.0f)));
+  Value normalized = create.layerNorm(tensor({rows, width}), matrix, one, zero,
+      /*axis=*/1, op.getEpsilonAttr(), op.getStashTypeAttr());
+  Value channelData = reshape(normalized, {batch, channels, spatial});
+  Value scale = reshape(op.getScale(), {1, channels, 1});
+  Value bias = reshape(op.getBias(), {1, channels, 1});
+  Value result = create.add(create.mul(channelData, scale), bias);
+  rewriter.replaceOp(op, reshape(result, inputType.getShape()));
+  return success();
+}
+
 struct RemoveGroupNormPattern1
     : public OpRewritePattern<ONNXGroupNormalizationOp> {
   using OpRewritePattern<ONNXGroupNormalizationOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ONNXGroupNormalizationOp groupNormOp,
       PatternRewriter &rewriter) const final {
+    auto type = dyn_cast<RankedTensorType>(groupNormOp.getX().getType());
+    if (type && type.hasStaticShape() && type.getRank() <= 5 &&
+        type.getElementType().isF32())
+      return rewriteStaticGroupNormalization(groupNormOp, rewriter);
     return ONNXGroupNormalizationCommon<ONNXGroupNormalizationOp>(
         groupNormOp, rewriter);
   }

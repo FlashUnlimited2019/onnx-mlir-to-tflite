@@ -22,6 +22,7 @@ add_onnx_mlir_library(OMONNXToTFL
   NN/Attention.cpp
   NN/BatchNormalization.cpp
   NN/Conv.cpp
+  NN/Contrib.cpp
   NN/GridSample.cpp
   NN/LayerNormalization.cpp
   NN/LRN.cpp
@@ -30,6 +31,7 @@ add_onnx_mlir_library(OMONNXToTFL
   NN/Recurrent.cpp
   NN/MaxPool.cpp
   NN/MaxPoolWithIndices.cpp
+  NN/StaticPaddedNMS.cpp
   NN/StaticSampling.cpp
   NN/TransformerOptimize.cpp
   Signal/STFT.cpp

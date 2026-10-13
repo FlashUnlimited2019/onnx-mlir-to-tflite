@@ -102,7 +102,7 @@ module {
 }
 
 // CHECK-LABEL: func.func @main
-// CHECK: "tfl.gather_nd"
+// CHECK: "tfl.gather"{{.*}} : (tensor<4x1xf32>, tensor<2xi32>) -> tensor<2x1xf32>
 // CHECK: "tfl.neg"
 // CHECK: "tfl.mean"
 // CHECK-NOT: onnx.
@@ -169,7 +169,7 @@ module {
 }
 
 // CHECK-LABEL: func.func @main
-// CHECK: "tfl.gather_nd"
+// CHECK: "tfl.gather"{{.*}} {axis = 0 : i32, batch_dims = 0 : i32}
 // CHECK: "tfl.sum"
 // CHECK-NOT: onnx.
 
@@ -185,7 +185,7 @@ module {
 }
 
 // CHECK-LABEL: func.func @main
-// CHECK: "tfl.gather_nd"
+// CHECK: "tfl.gather"{{.*}} : (tensor<8x1xf32>, tensor<1xi32>) -> tensor<1x1xf32>
 // CHECK-NOT: onnx.
 
 // -----
@@ -201,7 +201,7 @@ module {
 }
 
 // CHECK-LABEL: func.func @main
-// CHECK: "tfl.gather_nd"
+// CHECK: "tfl.gather"{{.*}} {axis = 0 : i32, batch_dims = 0 : i32}
 // CHECK: "tfl.sum"
 // CHECK-NOT: onnx.
 

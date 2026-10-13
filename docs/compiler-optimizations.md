@@ -50,20 +50,71 @@ by default in the driver and can be disabled independently.
 Preprocessing runs before dialect conversion, while ONNX operation semantics
 and logical axes are still explicit.
 
+### Group normalization rank reduction
+
+Static FP32 `GroupNormalization` with per-channel affine parameters reshapes
+each instance/group into a row of a rank-two tensor. Mean and variance are
+computed within each row; the normalized values are then reshaped to rank
+three for per-channel scale/bias before restoring the output shape. This
+avoids introducing rank-six intermediates for rank-five inputs. The rewrite
+runs during importer canonicalization and is also registered for direct
+ONNX-to-TFL conversion. It accepts ranks 2-5, positive groups dividing the
+channel count, `stash_type=1`, and matching constant or runtime parameters.
+
 ### Static tensor-update recognition
 
 General scatter lowering can require coordinate construction, gathers, sparse
-updates, and several layout conversions. Two statically provable update forms
+updates, and several layout conversions. Statically provable update forms
 are replaced with `Slice` and `Concat`:
 
 - `Transpose -> ScatterND -> inverse Transpose` is recognized when constant
   indices describe one contiguous interval along a single logical axis.
 - `ScatterElements` is recognized as a slice update when constant indices
   select the same contiguous interval for every other fully covered axis.
+- `ScatterND` is recognized when its constant coordinate tuples enumerate a
+  single-axis slab in row-major order, including complete trailing slices.
+  Full coverage becomes the updates tensor, with a reshape if needed.
 
 The rewrite requires static shapes, FP32 data, `reduction="none"`, compatible
-update shapes, valid constant indices, and exact permutation relationships.
-Irregular indices and reduction forms retain the general scatter lowering.
+update shapes, valid constant indices, and exact permutation relationships
+where transposes are involved. Negative coordinates are normalized before
+checking every tuple; holes, duplicates, reordered tuples, and partial coverage
+on multiple axes do not match. Irregular indices and reduction forms retain
+the general scatter lowering. A Slice contained in a single Concat operand
+bypasses the other operands without changing their other consumers.
+
+The rewrite uses source overwrite semantics, not the floating-point identity
+`x + (u - x) = u`, which is unsafe under rounding and exceptional values.
+Direct copies preserve NaNs, infinities, and signed zeros.
+
+### Static coordinate selection
+
+Unbatched FP32 `GatherND` with the same proven slab traversal becomes a Slice
+and, if necessary, a Reshape. At the TFL stage, valid constant multidimensional
+coordinates can also be linearized into rank-one indices for a rank-two
+`Gather`, with reshapes restoring the original output shape. Duplicate and
+irregular gather coordinates retain their ordering. Every coordinate is
+checked independently before linearization; dynamic indices, oversized
+inspection work, and unsupported shapes retain the existing lowering.
+
+These rules only consume constants available at their respective stages.
+Coordinates that become constant later in TensorFlow/LiteRT optimization are
+not automatically revisited by the ONNX-MLIR-side rewrites.
+
+### Statically padded suppression
+
+A bounded `NonMaxSuppression` consumer can be replaced only when its complete
+indexing and scatter graph proves a fixed number of slots per batch and class.
+The rewrite preserves untouched padding, score thresholds, strict IoU
+comparison, and deterministic index tie-breaking. Independently observable
+variable-length results prevent this rewrite.
+
+Coordinates are extracted directly, small pairwise overlap tables are shared
+across classes, and masked scores are updated between unrolled selections.
+Self-removal is explicit even for degenerate boxes. Quadratic workspace is
+bounded; larger inputs retain linear-workspace selection. The result uses
+static builtin operations of rank at most three, without runtime loops or a
+substitution of native NMS kernels with different boundary behavior.
 
 ### Transformer projection packing
 
@@ -313,6 +364,10 @@ layout modes:
   integer addition, comparisons, casts, and selection. Floating-point
   arithmetic is not folded; signed addition overflow and out-of-range integer
   narrowing retain the original operations.
+- **Proven nonnegative indices:** remove negative-index checks only when
+  `ArgMax`/`ArgMin`, constants, views, concatenation, and safe integer operations
+  prove a nonnegative range. Addition overflow, unsafe narrowing, unknown
+  runtime values, and analysis-budget exhaustion retain the checks.
 - **Concat/Slice simplification:** when a static slice lies entirely within one
   concatenated operand, slice that operand directly, or reuse it if the slice
   selects it in full. Cross-boundary slices and fused activations are retained;
@@ -364,6 +419,10 @@ optimizer. Run it with `--help` for converter and work-directory options.
 Concat/Slice uses, and static-mask selection against NumPy across ranks 1–5,
 both layouts, and both TFL optimizer settings, including overflow fallbacks and
 bitwise preservation of floating-point exceptional values and signed zero.
+`test/e2e/run_static_padded_nms.py` checks padded suppression against ONNX Runtime
+across box formats, batches, classes, selection limits, threshold boundaries,
+ties, empty selections, degenerate boxes, both workspace paths, and rejected
+near-matches.
 
 See [Convert an ONNX model](convert-model.md) for the complete driver option
 reference and [Architecture](architecture.md) for the compiler and toolchain
