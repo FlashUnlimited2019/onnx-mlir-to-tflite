@@ -11,9 +11,9 @@ module {
   "onnx.EntryPoint"() {func = @squeeze_rank4} : () -> ()
 }
 // CHECK-LABEL: func.func @main(%arg0: tensor<1x1x1x64xf32>{{( \{[^}]*\})?}}) -> (tensor<1x64xf32>{{( \{[^}]*\})?}})
-// CHECK: arith.constant dense<[0, 3, 1, 2]> : tensor<4xi32>
-// CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<1x1x1x64xf32>, tensor<4xi32>) -> tensor<1x64x1x1xf32>
-// CHECK: "tfl.reshape"({{.*}}) : (tensor<1x64x1x1xf32>, tensor<2xi32>) -> tensor<1x64xf32>
+// CHECK-NOT: "tfl.transpose"
+// CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x1x1x64xf32>, tensor<2xi32>) -> tensor<1x64xf32>
+// CHECK-NOT: "tfl.transpose"
 
 // -----
 

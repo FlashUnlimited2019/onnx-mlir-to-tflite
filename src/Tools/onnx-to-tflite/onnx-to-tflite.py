@@ -110,7 +110,10 @@ def _parse_args() -> argparse.Namespace:
         "--layout-mode",
         choices=("legacy", "experimental"),
         default="legacy",
-        help="select the ONNX-to-TFL per-value layout strategy",
+        help=(
+            "legacy: rank-4 FP32 boundaries use NHWC; experimental: all "
+            "boundaries preserve ONNX axis order, with per-value internal layouts"
+        ),
     )
     parser.add_argument(
         "--layout-diagnostics",

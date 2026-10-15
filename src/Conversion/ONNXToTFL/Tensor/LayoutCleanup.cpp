@@ -135,9 +135,9 @@ FailureOr<Window> sliceWindow(Operation *op) {
   return Window{*begin, *size};
 }
 
-class CancelInverseTransposes final : public RewritePattern {
+class ComposeTransposes final : public RewritePattern {
 public:
-  explicit CancelInverseTransposes(MLIRContext *ctx)
+  explicit ComposeTransposes(MLIRContext *ctx)
       : RewritePattern("tfl.transpose", 5, ctx) {}
 
   LogicalResult matchAndRewrite(
@@ -147,10 +147,204 @@ public:
       return failure();
     Operation *first = op->getOperand(0).getDefiningOp();
     auto p = permutation(first);
-    if (failed(p) || !inverse(*p, *q) ||
-        first->getOperand(0).getType() != op->getResult(0).getType())
+    if (failed(p))
       return failure();
-    rewriter.replaceOp(op, first->getOperand(0));
+    if (inverse(*p, *q)) {
+      rewriter.replaceOp(op, first->getOperand(0));
+    } else {
+      if (!first->getResult(0).hasOneUse())
+        return failure();
+      SmallVector<int64_t> combined;
+      for (int64_t axis : *q)
+        combined.push_back((*p)[axis]);
+      Value result = createLayoutOp(rewriter, op->getLoc(), "tfl.transpose",
+          op->getResult(0).getType(),
+          ValueRange{first->getOperand(0),
+              constant(rewriter, op->getLoc(), combined)});
+      rewriter.replaceOp(op, result);
+    }
+    eraseIfDead(rewriter, first);
+    return success();
+  }
+};
+
+bool isPointwise(Operation *op) {
+  if (!op)
+    return false;
+  StringRef name = op->getName().getStringRef();
+  bool binary = name == "tfl.add" || name == "tfl.sub" || name == "tfl.mul" ||
+                name == "tfl.div" || name == "tfl.maximum" ||
+                name == "tfl.minimum";
+  bool unary = name == "tfl.relu" || name == "tfl.relu6" ||
+               name == "tfl.tanh" || name == "tfl.logistic" ||
+               name == "tfl.leaky_relu";
+  return (binary || unary) && isOp(op, name, binary ? 2 : 1);
+}
+
+// Move a permutation through pointwise arithmetic only when it eliminates
+// layout copies without increasing the number of view operations. Broadcast
+// dimensions are right-aligned before permutation; equal extents alone do not
+// imply that two axes can be interchanged. No arithmetic is reassociated.
+class CommutePointwiseTranspose final : public RewritePattern {
+public:
+  explicit CommutePointwiseTranspose(MLIRContext *ctx)
+      : RewritePattern("tfl.transpose", 3, ctx) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, PatternRewriter &rewriter) const override {
+    auto q = permutation(op);
+    if (failed(q) || q->size() > 4)
+      return failure();
+    Operation *middle = op->getOperand(0).getDefiningOp();
+    if (!isPointwise(middle) || !middle->getResult(0).hasOneUse())
+      return failure();
+    auto output = tensorType(middle->getResult(0));
+    if (!output || !output.getElementType().isF32())
+      return failure();
+
+    struct OperandPlan {
+      Value value;
+      RankedTensorType type;
+      bool transpose;
+    };
+    SmallVector<OperandPlan> plans;
+    SmallVector<Operation *> removable;
+    SmallVector<int64_t> broadcast(output.getRank(), 1);
+    int64_t newViews = 0, newCopies = 0;
+    for (Value operand : middle->getOperands()) {
+      auto type = tensorType(operand);
+      if (!type || type.getElementType() != output.getElementType() ||
+          type.getRank() > output.getRank())
+        return failure();
+      SmallVector<int64_t> aligned(output.getRank(), 1);
+      int64_t offset = output.getRank() - type.getRank();
+      for (int64_t i = 0; i < type.getRank(); ++i) {
+        int64_t dim = type.getDimSize(i), axis = offset + i;
+        if (dim != 1 && dim != output.getDimSize(axis))
+          return failure();
+        broadcast[axis] = std::max(broadcast[axis], dim);
+        aligned[axis] = dim;
+      }
+      auto *first = operand.getDefiningOp();
+      auto p = permutation(first);
+      if (succeeded(p) && inverse(*p, *q)) {
+        plans.push_back(
+            {first->getOperand(0), tensorType(first->getOperand(0)), false});
+        if (llvm::all_of(operand.getUsers(),
+                [&](Operation *user) { return user == middle; }) &&
+            !llvm::is_contained(removable, first))
+          removable.push_back(first);
+        continue;
+      }
+      if (type.getRank() == 0) {
+        plans.push_back({operand, type, false});
+        continue;
+      }
+      SmallVector<int64_t> shape;
+      int64_t lastRealAxis = -1;
+      bool copy = false;
+      for (int64_t axis : *q) {
+        shape.push_back(aligned[axis]);
+        if (aligned[axis] != 1) {
+          copy |= axis < lastRealAxis;
+          lastRealAxis = axis;
+        }
+      }
+      // Avoid introducing an extra rank-promotion view before a real copy.
+      if (copy && type.getRank() != output.getRank())
+        return failure();
+      auto target = RankedTensorType::get(shape, type.getElementType());
+      plans.push_back({operand, target, copy});
+      newCopies += copy;
+      newViews += copy || target != type;
+    }
+    if (ArrayRef<int64_t>(broadcast) != output.getShape() ||
+        newCopies >= 1 + static_cast<int64_t>(removable.size()) ||
+        newViews > 1 + static_cast<int64_t>(removable.size()))
+      return failure();
+
+    SmallVector<Value> inputs;
+    for (const auto &plan : plans) {
+      Value value = plan.value;
+      if (plan.transpose || value.getType() != plan.type) {
+        Value parameter = constant(rewriter, op->getLoc(),
+            plan.transpose ? ArrayRef<int64_t>(*q) : plan.type.getShape());
+        value = createLayoutOp(rewriter, op->getLoc(),
+            plan.transpose ? "tfl.transpose" : "tfl.reshape", plan.type,
+            ValueRange{value, parameter});
+      }
+      inputs.push_back(value);
+    }
+    Value result =
+        createLayoutOp(rewriter, op->getLoc(), middle->getName().getStringRef(),
+            op->getResult(0).getType(), inputs, middle->getAttrs());
+    rewriter.replaceOp(op, result);
+    rewriter.eraseOp(middle);
+    for (Operation *first : removable)
+      eraseIfDead(rewriter, first);
+    return success();
+  }
+};
+
+class CommutePadTranspose final : public RewritePattern {
+public:
+  explicit CommutePadTranspose(MLIRContext *ctx)
+      : RewritePattern("tfl.transpose", 4, ctx) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, PatternRewriter &rewriter) const override {
+    auto q = permutation(op);
+    if (failed(q) || q->size() > 4)
+      return failure();
+    Operation *pad = op->getOperand(0).getDefiningOp();
+    bool explicitValue = isOp(pad, "tfl.padv2", 3);
+    if ((!explicitValue && !isOp(pad, "tfl.pad", 2)) ||
+        !pad->getResult(0).hasOneUse())
+      return failure();
+    Operation *first = pad->getOperand(0).getDefiningOp();
+    auto p = permutation(first);
+    if (failed(p) || !inverse(*p, *q))
+      return failure();
+    auto input = tensorType(pad->getOperand(0));
+    auto output = tensorType(pad->getResult(0));
+    auto padsType = tensorType(pad->getOperand(1));
+    if (!input || !output || !input.getElementType().isF32() ||
+        output.getElementType() != input.getElementType() ||
+        input.getRank() != output.getRank() || !padsType ||
+        padsType.getRank() != 2 || padsType.getDimSize(0) != input.getRank() ||
+        padsType.getDimSize(1) != 2 ||
+        !padsType.getElementType().isSignlessInteger(32))
+      return failure();
+    if (explicitValue) {
+      auto scalar = tensorType(pad->getOperand(2));
+      if (!scalar || scalar.getRank() != 0 ||
+          scalar.getElementType() != input.getElementType())
+        return failure();
+    }
+    auto pads = getConstantIntValues(pad->getOperand(1));
+    if (failed(pads) || pads->size() != 2 * q->size())
+      return failure();
+    for (int64_t i = 0; i < input.getRank(); ++i) {
+      int64_t before = (*pads)[2 * i], after = (*pads)[2 * i + 1];
+      if (before < 0 || after < 0 ||
+          before + after != output.getDimSize(i) - input.getDimSize(i))
+        return failure();
+    }
+    SmallVector<int32_t> reordered;
+    for (int64_t axis : *q) {
+      reordered.push_back((*pads)[2 * axis]);
+      reordered.push_back((*pads)[2 * axis + 1]);
+    }
+    Value padding = arith::ConstantOp::create(rewriter, op->getLoc(), padsType,
+        DenseIntElementsAttr::get(padsType, reordered));
+    SmallVector<Value> inputs{first->getOperand(0), padding};
+    if (explicitValue)
+      inputs.push_back(pad->getOperand(2));
+    Value result =
+        createLayoutOp(rewriter, op->getLoc(), pad->getName().getStringRef(),
+            op->getResult(0).getType(), inputs, pad->getAttrs());
+    rewriter.replaceOp(op, result);
+    rewriter.eraseOp(pad);
     eraseIfDead(rewriter, first);
     return success();
   }
@@ -252,6 +446,281 @@ SmallVector<int64_t> nonSingletonAxes(RankedTensorType type) {
   return axes;
 }
 
+SmallVector<int64_t> nonSingletonShape(ArrayRef<int64_t> shape) {
+  SmallVector<int64_t> result;
+  for (int64_t dim : shape)
+    if (dim != 1)
+      result.push_back(dim);
+  return result;
+}
+
+bool isSingletonReshape(Operation *op) {
+  if (!isOp(op, "tfl.reshape", 2))
+    return false;
+  auto input = tensorType(op->getOperand(0));
+  auto output = tensorType(op->getResult(0));
+  if (!input || !output || input.getElementType() != output.getElementType())
+    return false;
+  auto shape = indexVector(op->getOperand(1), output.getRank());
+  return succeeded(shape) && llvm::equal(*shape, output.getShape()) &&
+         nonSingletonShape(input.getShape()) ==
+             nonSingletonShape(output.getShape());
+}
+
+// Unit-axis views commute with pointwise operations if each broadcast axis is
+// mapped by position among the non-unit axes. Require a strict reduction in
+// views and do not duplicate shared computation or change reduction axes.
+class CommutePointwiseReshape final : public RewritePattern {
+public:
+  explicit CommutePointwiseReshape(MLIRContext *ctx)
+      : RewritePattern("tfl.reshape", 3, ctx) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, PatternRewriter &rewriter) const override {
+    if (!isSingletonReshape(op))
+      return failure();
+    Operation *middle = op->getOperand(0).getDefiningOp();
+    if (!isPointwise(middle) || !middle->getResult(0).hasOneUse())
+      return failure();
+    auto from = tensorType(middle->getResult(0));
+    auto to = tensorType(op->getResult(0));
+    if (!from.getElementType().isF32() || from.getRank() > 4 ||
+        to.getRank() > 4)
+      return failure();
+    auto oldAxes = nonSingletonAxes(from), newAxes = nonSingletonAxes(to);
+    SmallVector<std::pair<Value, RankedTensorType>> plans;
+    SmallVector<Operation *> removable;
+    SmallVector<int64_t> broadcast(from.getRank(), 1);
+    int64_t newViews = 0;
+    for (Value operand : middle->getOperands()) {
+      auto type = tensorType(operand);
+      if (!type || type.getElementType() != from.getElementType() ||
+          type.getRank() > from.getRank())
+        return failure();
+      SmallVector<int64_t> aligned(from.getRank(), 1);
+      int64_t offset = from.getRank() - type.getRank();
+      for (int64_t i = 0; i < type.getRank(); ++i) {
+        int64_t dim = type.getDimSize(i), axis = offset + i;
+        if (dim != 1 && dim != from.getDimSize(axis))
+          return failure();
+        broadcast[axis] = std::max(broadcast[axis], dim);
+        aligned[axis] = dim;
+      }
+      if (type.getRank() == 0) {
+        plans.emplace_back(operand, type);
+        continue;
+      }
+      SmallVector<int64_t> shape(to.getRank(), 1);
+      for (auto [oldAxis, newAxis] : llvm::zip(oldAxes, newAxes))
+        shape[newAxis] = aligned[oldAxis];
+      auto target = RankedTensorType::get(shape, type.getElementType());
+      Operation *first = operand.getDefiningOp();
+      if (isSingletonReshape(first) &&
+          first->getOperand(0).getType() == target) {
+        plans.emplace_back(first->getOperand(0), target);
+        if (llvm::all_of(operand.getUsers(),
+                [&](Operation *user) { return user == middle; }) &&
+            !llvm::is_contained(removable, first))
+          removable.push_back(first);
+      } else {
+        plans.emplace_back(operand, target);
+        newViews += type != target;
+      }
+    }
+    // Scalar operands alone still infer a scalar result, not a rank-one
+    // singleton tensor. Keep the explicit boundary view in that case.
+    int64_t resultRank = 0;
+    for (const auto &plan : plans)
+      resultRank = std::max(resultRank, plan.second.getRank());
+    if (resultRank != to.getRank() ||
+        ArrayRef<int64_t>(broadcast) != from.getShape() ||
+        newViews >= 1 + static_cast<int64_t>(removable.size()))
+      return failure();
+    SmallVector<Value> inputs;
+    for (auto [value, type] : plans) {
+      if (value.getType() != type)
+        value = createLayoutOp(rewriter, op->getLoc(), "tfl.reshape", type,
+            ValueRange{
+                value, constant(rewriter, op->getLoc(), type.getShape())});
+      inputs.push_back(value);
+    }
+    Value result = createLayoutOp(rewriter, op->getLoc(),
+        middle->getName().getStringRef(), to, inputs, middle->getAttrs());
+    rewriter.replaceOp(op, result);
+    rewriter.eraseOp(middle);
+    for (Operation *first : removable)
+      eraseIfDead(rewriter, first);
+    return success();
+  }
+};
+
+// Move removal of singleton axes before a transpose. Keep the identities of
+// the remaining axes (not merely their extents), and never duplicate a shared
+// transpose. The result has the requested shape without a high-rank restore.
+class ReduceSingletonTranspose final : public RewritePattern {
+public:
+  explicit ReduceSingletonTranspose(MLIRContext *ctx)
+      : RewritePattern("tfl.reshape", 3, ctx) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, PatternRewriter &rewriter) const override {
+    if (!isSingletonReshape(op))
+      return failure();
+    Operation *first = op->getOperand(0).getDefiningOp();
+    auto perm = permutation(first);
+    if (failed(perm) || !first->getResult(0).hasOneUse())
+      return failure();
+    auto input = tensorType(first->getOperand(0));
+    auto middle = tensorType(first->getResult(0));
+    auto output = tensorType(op->getResult(0));
+    if (output.getRank() > 4 || output.getRank() >= input.getRank())
+      return failure();
+    SmallVector<int64_t> retained;
+    int64_t cursor = 0;
+    for (int64_t dim : output.getShape()) {
+      while (cursor < middle.getRank() && middle.getDimSize(cursor) != dim &&
+             middle.getDimSize(cursor) == 1)
+        ++cursor;
+      if (cursor == middle.getRank() || middle.getDimSize(cursor) != dim)
+        return failure();
+      retained.push_back((*perm)[cursor++]);
+    }
+    for (; cursor < middle.getRank(); ++cursor)
+      if (middle.getDimSize(cursor) != 1)
+        return failure();
+
+    SmallVector<int64_t> shape, mapping(input.getRank(), -1), reducedPerm;
+    for (int64_t axis = 0; axis < input.getRank(); ++axis)
+      if (llvm::is_contained(retained, axis)) {
+        mapping[axis] = shape.size();
+        shape.push_back(input.getDimSize(axis));
+      }
+    bool identity = true;
+    for (auto [i, axis] : llvm::enumerate(retained)) {
+      reducedPerm.push_back(mapping[axis]);
+      identity &= mapping[axis] == static_cast<int64_t>(i);
+    }
+    Value target = constant(rewriter, op->getLoc(), shape);
+    auto type = RankedTensorType::get(shape, input.getElementType());
+    Value result = createLayoutOp(rewriter, op->getLoc(), "tfl.reshape", type,
+        ValueRange{first->getOperand(0), target});
+    if (!identity) {
+      Value reduced = constant(rewriter, op->getLoc(), reducedPerm);
+      result = createLayoutOp(rewriter, op->getLoc(), "tfl.transpose", output,
+          ValueRange{result, reduced});
+    }
+    rewriter.replaceOp(op, result);
+    rewriter.eraseOp(first);
+    return success();
+  }
+};
+
+// Hoist singleton-only branch reshapes after Concat. Equal non-unit prefixes
+// and suffixes prove identical row-major copy boundaries, including a concat
+// axis of length one. Splits/merges of real axes and shared views do not match.
+// A branch transpose that only moves unit axes is another zero-copy view.
+class HoistConcatSingletonReshapes final : public RewritePattern {
+public:
+  explicit HoistConcatSingletonReshapes(MLIRContext *ctx)
+      : RewritePattern("tfl.concatenation", 3, ctx) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() < 2 || op->getNumResults() != 1 ||
+        op->getNumRegions() || op->getNumSuccessors())
+      return failure();
+    auto output = tensorType(op->getResult(0));
+    auto axisAttr = op->getAttrOfType<IntegerAttr>("axis");
+    auto activation =
+        op->getAttrOfType<StringAttr>("fused_activation_function");
+    if (!output || !axisAttr || !axisAttr.getType().isSignlessInteger(32) ||
+        !activation || activation.getValue() != "NONE")
+      return failure();
+    int64_t axis = axisAttr.getInt();
+    if (axis < 0 || axis >= output.getRank())
+      return failure();
+    SmallVector<Operation *> reshapes;
+    SmallVector<Value> sources;
+    int64_t total = 0;
+    for (Value operand : op->getOperands()) {
+      if (!operand.hasOneUse())
+        return failure();
+      Operation *reshape = operand.getDefiningOp();
+      if (auto perm = permutation(reshape); succeeded(perm)) {
+        auto type = tensorType(reshape->getOperand(0));
+        SmallVector<int64_t> order;
+        for (int64_t axis : *perm)
+          if (type.getDimSize(axis) != 1)
+            order.push_back(axis);
+        if (order != nonSingletonAxes(type) ||
+            !reshape->getOperand(0).hasOneUse())
+          return failure();
+        reshapes.push_back(reshape);
+        reshape = reshape->getOperand(0).getDefiningOp();
+      }
+      if (!isSingletonReshape(reshape))
+        return failure();
+      auto type = tensorType(operand);
+      if (type.getRank() != output.getRank() ||
+          type.getElementType() != output.getElementType())
+        return failure();
+      for (int64_t i = 0; i < type.getRank(); ++i)
+        if (i != axis && type.getDimSize(i) != output.getDimSize(i))
+          return failure();
+      if (type.getDimSize(axis) > output.getDimSize(axis) - total)
+        return failure();
+      total += type.getDimSize(axis);
+      sources.push_back(reshape->getOperand(0));
+      reshapes.push_back(reshape);
+    }
+    if (total != output.getDimSize(axis))
+      return failure();
+    auto first = tensorType(sources.front());
+    if (first.getRank() > output.getRank() || first.getRank() > 4)
+      return failure();
+    int64_t newAxis = -1;
+    for (int64_t candidate = 0; candidate < first.getRank(); ++candidate) {
+      bool valid = true;
+      for (auto [source, operand] : llvm::zip(sources, op->getOperands())) {
+        auto a = tensorType(source), b = tensorType(operand);
+        if (a.getRank() != first.getRank() ||
+            a.getDimSize(candidate) != b.getDimSize(axis) ||
+            nonSingletonShape(a.getShape().take_front(candidate)) !=
+                nonSingletonShape(b.getShape().take_front(axis)) ||
+            nonSingletonShape(a.getShape().drop_front(candidate + 1)) !=
+                nonSingletonShape(b.getShape().drop_front(axis + 1))) {
+          valid = false;
+          break;
+        }
+        for (int64_t i = 0; i < first.getRank(); ++i)
+          valid &= i == candidate || a.getDimSize(i) == first.getDimSize(i);
+      }
+      if (valid) {
+        newAxis = candidate;
+        break;
+      }
+    }
+    if (newAxis < 0)
+      return failure();
+    SmallVector<int64_t> shape(first.getShape());
+    shape[newAxis] = total;
+    auto type = RankedTensorType::get(shape, output.getElementType());
+    NamedAttrList attrs(op->getAttrs());
+    attrs.set("axis", rewriter.getI32IntegerAttr(newAxis));
+    Value result = createLayoutOp(rewriter, op->getLoc(), "tfl.concatenation",
+        type, sources, attrs.getAttrs());
+    if (type != output) {
+      Value target = constant(rewriter, op->getLoc(), output.getShape());
+      result = createLayoutOp(rewriter, op->getLoc(), "tfl.reshape", output,
+          ValueRange{result, target});
+    }
+    rewriter.replaceOp(op, result);
+    for (Operation *reshape : reshapes)
+      rewriter.eraseOp(reshape);
+    return success();
+  }
+};
+
 class CommuteSingletonReshape final : public RewritePattern {
 public:
   explicit CommuteSingletonReshape(MLIRContext *ctx)
@@ -326,12 +795,16 @@ public:
 
 LogicalResult optimizeTFLLocalLayouts(ModuleOp module) {
   RewritePatternSet patterns(module.getContext());
-  patterns.add<CancelInverseTransposes, CommuteWindowOrTile, ComposeSlices,
-      CommuteSingletonReshape>(module.getContext());
+  patterns.add<ComposeTransposes, CommuteWindowOrTile, ComposeSlices,
+      CommuteSingletonReshape, ReduceSingletonTranspose,
+      HoistConcatSingletonReshapes, CommutePointwiseTranspose,
+      CommutePadTranspose, CommutePointwiseReshape>(module.getContext());
   SmallVector<Operation *> roots;
   module.walk([&](Operation *op) {
     if (op->getName().getStringRef() == "tfl.transpose" ||
-        op->getName().getStringRef() == "tfl.slice")
+        op->getName().getStringRef() == "tfl.slice" ||
+        op->getName().getStringRef() == "tfl.reshape" ||
+        op->getName().getStringRef() == "tfl.concatenation")
       roots.push_back(op);
   });
   GreedyRewriteConfig config;

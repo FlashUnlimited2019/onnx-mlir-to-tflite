@@ -105,9 +105,9 @@ module {
   "onnx.EntryPoint"() {func = @reshape_from_rank4} : () -> ()
 }
 // CHECK-LABEL: func.func @main(%arg0: tensor<1x4x8x1xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x8xf32>{{( \{[^}]*\})?}})
-// CHECK: arith.constant dense<[0, 3, 1, 2]> : tensor<4xi32>
-// CHECK: "tfl.transpose"({{.*}}) : (tensor<1x4x8x1xf32>, tensor<4xi32>) -> tensor<1x1x4x8xf32>
-// CHECK: "tfl.reshape"({{.*}}) : (tensor<1x1x4x8xf32>, tensor<3xi32>) -> tensor<1x4x8xf32>
+// CHECK-NOT: "tfl.transpose"
+// CHECK: "tfl.reshape"(%arg0, {{.*}}) : (tensor<1x4x8x1xf32>, tensor<3xi32>) -> tensor<1x4x8xf32>
+// CHECK-NOT: "tfl.transpose"
 
 // -----
 

@@ -61,3 +61,38 @@ module {
 // CHECK: arith.constant dense<[4, 0, 2, 3, 1]> : tensor<5xi32>
 // CHECK: "tfl.transpose"{{.*}} : (tensor<2x1x3x4x5xf32>, tensor<5xi32>) -> tensor<5x2x3x4x1xf32>
 // CHECK: "tfl.reshape"{{.*}} -> tensor<5x2x3x1x4x1xf32>
+
+// -----
+
+// Convolution stays NHWC internally, but the public interface and aliases
+// retain ONNX order. The filter is a constant, not a public activation.
+module {
+  func.func @rank4_conv(%input: tensor<1x2x3x5xf32>) -> (tensor<1x4x3x5xf32>, tensor<1x2x3x5xf32>) {
+    %w = onnx.Constant dense<0.5> : tensor<4x2x1x1xf32>
+    %none = "onnx.NoValue"() : () -> none
+    %y = "onnx.Conv"(%input, %w, %none) <{auto_pad = "VALID", group = 1 : si64, kernel_shape = [1, 1], strides = [1, 1], dilations = [1, 1]}> : (tensor<1x2x3x5xf32>, tensor<4x2x1x1xf32>, none) -> tensor<1x4x3x5xf32>
+    return %y, %input : tensor<1x4x3x5xf32>, tensor<1x2x3x5xf32>
+  }
+  "onnx.EntryPoint"() {func = @rank4_conv} : () -> ()
+}
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x5xf32>
+// CHECK-SAME: -> (tensor<1x4x3x5xf32>
+// CHECK: %[[NHWC:.*]] = "tfl.transpose"(%arg0, {{.*}}) : (tensor<1x2x3x5xf32>, tensor<4xi32>) -> tensor<1x3x5x2xf32>
+// CHECK: %[[CONV:.*]] = "tfl.conv_2d"(%[[NHWC]], {{.*}}) {{.*}} -> tensor<1x3x5x4xf32>
+// CHECK: %[[NCHW:.*]] = "tfl.transpose"(%[[CONV]], {{.*}}) : (tensor<1x3x5x4xf32>, tensor<4xi32>) -> tensor<1x4x3x5xf32>
+// CHECK: return %[[NCHW]], %arg0 : tensor<1x4x3x5xf32>, tensor<1x2x3x5xf32>
+
+// -----
+
+// Equal shapes must not remove a non-identity physical permutation.
+module {
+  func.func @rank4_equal_extents(%input: tensor<2x2x2x2xf32>) -> tensor<2x2x2x2xf32> {
+    %moved = "onnx.Transpose"(%input) <{perm = [2, 0, 3, 1]}> : (tensor<2x2x2x2xf32>) -> tensor<2x2x2x2xf32>
+    return %moved : tensor<2x2x2x2xf32>
+  }
+  "onnx.EntryPoint"() {func = @rank4_equal_extents} : () -> ()
+}
+// CHECK-LABEL: func.func @main(%arg0: tensor<2x2x2x2xf32>
+// CHECK: arith.constant dense<[2, 0, 3, 1]> : tensor<4xi32>
+// CHECK: %[[MOVED:.*]] = "tfl.transpose"(%arg0, {{.*}}) : (tensor<2x2x2x2xf32>, tensor<4xi32>) -> tensor<2x2x2x2xf32>
+// CHECK: return %[[MOVED]]

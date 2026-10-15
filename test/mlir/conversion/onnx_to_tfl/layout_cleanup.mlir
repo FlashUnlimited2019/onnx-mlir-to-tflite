@@ -74,8 +74,9 @@ module {
   "onnx.EntryPoint"() {func = @not_inverse} : () -> ()
 }
 // CHECK-LABEL: func.func @main
-// CHECK: "tfl.transpose"
-// CHECK: "tfl.transpose"
+// CHECK: %[[P:.*]] = arith.constant dense<[2, 0, 1]> : tensor<3xi32>
+// CHECK: "tfl.transpose"(%arg0, %[[P]])
+// CHECK-NOT: "tfl.transpose"
 // CHECK: return
 
 // -----

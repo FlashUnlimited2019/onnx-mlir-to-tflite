@@ -1243,6 +1243,15 @@ public:
         rewriter.getNamedAttr(
             "stride_w", rewriter.getI32IntegerAttr(strides[1]))};
     Value filter = adaptor.getOperands()[1];
+    // Constants normally arrive as OHWI, but a runtime/computed filter may
+    // carry an identity or another experimental layout. Honor its encoding
+    // before selecting regular, grouped, or depthwise TFL kernels.
+    FailureOr<Value> channelsLastFilter = convertTFLValueLayout(rewriter,
+        op.getLoc(), filter, stripONNXToTFLLayoutEncoding(filterType),
+        getONNXToTFLPhysicalToLogicalLayout(filterType), channelsLastLayout);
+    if (failed(channelsLastFilter))
+      return failure();
+    filter = *channelsLastFilter;
     StringRef tflOpName = "tfl.conv_2d";
     if (isDepthwise) {
       // Generic rank-4 Constant lowering maps ONNX OIHW to OHWI. TFL

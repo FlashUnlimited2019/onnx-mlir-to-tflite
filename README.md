@@ -148,11 +148,17 @@ reference.
 ## Layout contract
 
 ONNX commonly represents rank-4 activations as NCHW, while TFLite uses NHWC.
-The default `legacy` mode exposes rank-4 TFLite graph inputs and outputs as
+The default `legacy` mode exposes rank-4 FP32 graph inputs and outputs as
 NHWC and keeps convolution and pooling regions in NHWC. It does not insert
 runtime transposes solely to preserve an NCHW external ABI. Callers must
 therefore adapt rank-4 boundary tensors when comparing or integrating the
 generated model.
+
+With `experimental`, every input and output keeps its original ONNX axis order
+(NCHW for conventional image tensors). Internal layouts are optimized
+independently, with boundary transposes where required. See
+[Layout selection](docs/convert-model.md#layout-selection) for compatibility
+and validation guidance.
 
 Rank-1, rank-2, rank-3, and rank-5-or-higher graph boundaries retain their
 ONNX axis order. Local layout conversions required by individual operations,

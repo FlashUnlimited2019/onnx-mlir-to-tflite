@@ -225,8 +225,9 @@ LogicalResult finalizeEntryPointTypes(ModuleOp module) {
 
   // The conversion driver represents a converted entry argument with an
   // unrealized cast because the surrounding function is deliberately kept
-  // legal during operation conversion. Retype the ABI argument to NHWC and
-  // remove that type-only boundary cast; no runtime Transpose is introduced.
+  // legal during operation conversion. Materialize the selected public type
+  // and remove the type-only cast. Experimental boundary layout bridges have
+  // already been lowered to runtime operations where necessary.
   for (auto [index, argument] : llvm::enumerate(function.getArguments())) {
     Type convertedType = inputs[index];
     if (argument.getType() == convertedType)

@@ -92,16 +92,16 @@ def models():
         [],
         "constant_no_inputs",
         [],
-        [value("constant", [2, 3])],
+        [value("constant", [1, 2, 3, 4])],
         [
             numpy_helper.from_array(
-                np.arange(6, dtype=np.float32).reshape(2, 3), "constant"
+                np.arange(24, dtype=np.float32).reshape(1, 2, 3, 4), "constant"
             )
         ],
     )
 
 
-def compare(source, target, use_buffer_offset):
+def compare(source, target, use_buffer_offset, layout_mode="auto", delegates=True):
     model = schema.Model.GetRootAsModel(target.read_bytes(), 0)
     assert model.SignatureDefsLength() == 1
     signature = model.SignatureDefs(0)
@@ -142,7 +142,12 @@ def compare(source, target, use_buffer_offset):
     session = ort.InferenceSession(
         str(source), sess_options=options, providers=["CPUExecutionProvider"]
     )
-    interpreter = tf.lite.Interpreter(model_path=str(target), num_threads=1)
+    runtime_options = dict(model_path=str(target), num_threads=1)
+    if not delegates:
+        runtime_options["experimental_op_resolver_type"] = (
+            tf.lite.experimental.OpResolverType.BUILTIN_WITHOUT_DEFAULT_DELEGATES
+        )
+    interpreter = tf.lite.Interpreter(**runtime_options)
     interpreter.allocate_tensors()
     # Runtime APIs may rebuild name maps in alphabetical order independently
     # of the file's vectors. Check their mappings, not their display order.
@@ -153,7 +158,7 @@ def compare(source, target, use_buffer_offset):
     assert set(outputs) == {item.name for item in session.get_outputs()}
     details = {item["index"]: item for item in interpreter.get_input_details()}
     # Use a second interpreter to compare the named and index-based interfaces.
-    named_interpreter = tf.lite.Interpreter(model_path=str(target), num_threads=1)
+    named_interpreter = tf.lite.Interpreter(**runtime_options)
     runner = named_interpreter.get_signature_runner("serving_default")
     assert {
         name: item["index"] for name, item in runner.get_input_details().items()
@@ -174,7 +179,7 @@ def compare(source, target, use_buffer_offset):
                 data = rng.normal(size=metadata.shape).astype(np.float32)
             feeds[metadata.name] = data
             physical = np.ascontiguousarray(
-                onnx_to_tfl_input(data, tuple(detail["shape"]))
+                onnx_to_tfl_input(data, tuple(detail["shape"]), layout_mode)
             )
             physical_feeds[metadata.name] = physical
             interpreter.set_tensor(detail["index"], physical)
@@ -184,7 +189,7 @@ def compare(source, target, use_buffer_offset):
         assert set(actual) == set(outputs)
         for (name, index), reference in zip(outputs.items(), expected):
             np.testing.assert_array_equal(actual[name], interpreter.get_tensor(index))
-            converted = tfl_to_onnx_output(actual[name], reference.shape)
+            converted = tfl_to_onnx_output(actual[name], reference.shape, layout_mode)
             assert (
                 converted.dtype == reference.dtype
                 and converted.shape == reference.shape
@@ -255,7 +260,7 @@ def main():
                         )
                         if result.returncode:
                             raise RuntimeError(result.stdout + result.stderr)
-                        record = compare(source, target, offset)
+                        record = compare(source, target, offset, layout)
                         record.update(
                             layout=layout, optimize=optimize, buffer_offset=offset
                         )

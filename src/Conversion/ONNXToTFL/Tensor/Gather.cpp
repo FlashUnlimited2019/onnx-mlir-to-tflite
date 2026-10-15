@@ -26,7 +26,9 @@ public:
         sourceDataType ? sourceDataType.getElementType() : Type();
     bool supportedDataType =
         dataElementType &&
-        (dataElementType.isF32() || dataElementType.isInteger(1));
+        (dataElementType.isF32() || dataElementType.isInteger(1) ||
+            dataElementType.isSignlessInteger(32) ||
+            dataElementType.isSignlessInteger(64));
     if (!sourceDataType || !sourceIndicesType || !sourceResultType ||
         !sourceDataType.hasStaticShape() ||
         !sourceResultType.hasStaticShape() || sourceDataType.getRank() < 1 ||
@@ -35,7 +37,8 @@ public:
         !sourceIndicesType.hasStaticShape() ||
         (!sourceIndicesType.getElementType().isSignlessInteger(32) &&
             !sourceIndicesType.getElementType().isSignlessInteger(64))) {
-      op.emitError("ONNXToTFL Gather requires matching static FP32 or bool "
+      op.emitError("ONNXToTFL Gather requires matching static FP32, bool, "
+                   "i32, or i64 "
                    "data/result and static i32/i64 indices");
       return failure();
     }

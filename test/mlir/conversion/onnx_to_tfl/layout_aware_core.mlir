@@ -134,10 +134,11 @@ module {
   "onnx.EntryPoint"() {func = @permuted_layout_transpose_softmax} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x4xf32>{{( \{[^}]*\})?}})
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x2x4xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<[0, 1, 3, 2]> : tensor<4xi32>
 // CHECK: "tfl.softmax"
-// CHECK-NOT: dense<[0, 2, 1, 3]>
+// CHECK: arith.constant dense<[0, 2, 1, 3]> : tensor<4xi32>
+// CHECK: "tfl.transpose"{{.*}} -> tensor<1x3x2x4xf32>
 // CHECK-NOT: onnx.
 
 // -----
@@ -191,11 +192,12 @@ module {
   "onnx.EntryPoint"() {func = @identity_layout_scatter_nd} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x3x4x2xf32>{{( \{[^}]*\})?}})
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x3x4xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x3x4xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x3x4xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.transpose"{{.*}} -> tensor<1x3x4x2xf32>
 // CHECK: "tfl.reshape"(%arg1, {{.*}}) {{.*}} -> tensor<1x3x4x1xf32>
 // CHECK: "tfl.slice"{{.*}} -> tensor<1x3x4x1xf32>
 // CHECK: "tfl.concatenation"{{.*}} {axis = 3 : i32, fused_activation_function = "NONE"}
+// CHECK: "tfl.transpose"{{.*}} -> tensor<1x2x3x4xf32>
 // CHECK-NOT: "tfl.scatter_nd"
 // CHECK-NOT: onnx.
 
@@ -232,10 +234,13 @@ module {
   "onnx.EntryPoint"() {func = @channels_last_conv_pool_chain} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x8x8x3xf32>{{( \{[^}]*\})?}}, %arg1: tensor<4x3x3x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x1x1x4xf32>{{( \{[^}]*\})?}})
-// CHECK: "tfl.conv_2d"{{.*}} -> tensor<1x6x6x4xf32>
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x3x8x8xf32>{{( \{[^}]*\})?}}, %arg1: tensor<4x3x3x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x4x1x1xf32>{{( \{[^}]*\})?}})
+// CHECK: "tfl.transpose"(%arg0, {{.*}}) {{.*}} -> tensor<1x8x8x3xf32>
+// CHECK: %[[OHWI:.*]] = "tfl.transpose"(%arg1, {{.*}}) {{.*}} -> tensor<4x3x3x3xf32>
+// CHECK: "tfl.conv_2d"({{.*}}, %[[OHWI]], {{.*}}) {{.*}} -> tensor<1x6x6x4xf32>
 // CHECK: "tfl.max_pool_2d"{{.*}} -> tensor<1x3x3x4xf32>
 // CHECK: "tfl.average_pool_2d"{{.*}} -> tensor<1x1x1x4xf32>
+// CHECK: "tfl.transpose"{{.*}} -> tensor<1x4x1x1xf32>
 // CHECK-NOT: "tfl.transpose"
 // CHECK-NOT: onnx.
 
@@ -289,8 +294,9 @@ module {
   "onnx.EntryPoint"() {func = @singleton_axis_layout_chain} : () -> ()
 }
 
-// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x4x8xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x2x8x8xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x4x8xf32>{{( \{[^}]*\})?}})
+// CHECK-LABEL: func.func @main(%arg0: tensor<1x2x4x8xf32>{{( \{[^}]*\})?}}, %arg1: tensor<1x2x8x8xf32>{{( \{[^}]*\})?}}) -> (tensor<1x8x2x4xf32>{{( \{[^}]*\})?}})
 // CHECK: "tfl.batch_matmul"
 // CHECK-COUNT-2: "tfl.reshape"
+// CHECK: "tfl.transpose"{{.*}} -> tensor<1x8x2x4xf32>
 // CHECK-NOT: "tfl.transpose"
 // CHECK-NOT: onnx.

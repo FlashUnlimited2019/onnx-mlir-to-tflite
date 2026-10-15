@@ -19,11 +19,15 @@ public:
       ConversionPatternRewriter &rewriter) const override {
     auto inputType = dyn_cast<RankedTensorType>(op.getInput().getType());
     auto resultType = dyn_cast<RankedTensorType>(op.getOutput().getType());
-    if (!inputType || !resultType || resultType.getRank() != 2 ||
-        failed(validateStaticF32Tensor(op, inputType, "Flatten input")) ||
-        failed(validateStaticF32Tensor(op, resultType, "Flatten result"))) {
-      op.emitError(
-          "ONNXToTFL Flatten supports static f32 tensors and rank-2 results");
+    if (!inputType || !resultType || inputType.getRank() < 1 ||
+        resultType.getRank() != 2 || !inputType.hasStaticShape() ||
+        !resultType.hasStaticShape() ||
+        inputType.getElementType() != resultType.getElementType() ||
+        !(inputType.getElementType().isF32() ||
+            inputType.getElementType().isSignlessInteger(32) ||
+            inputType.getElementType().isSignlessInteger(64))) {
+      op.emitError("ONNXToTFL Flatten supports static f32, i32, or i64 "
+                   "tensors with matching element types and rank-2 results");
       return failure();
     }
     int64_t rank = inputType.getRank();
@@ -47,9 +51,9 @@ public:
     }
 
     Value input = adaptor.getInput();
-    if (rank == 4) {
-      // Rank-4 activations are physically NHWC. ONNX Flatten observes NCHW
-      // row-major order, so restore logical order before flattening.
+    if (rank == 4 && inputType.getElementType().isF32()) {
+      // Rank-4 FP32 activations are physically NHWC. Restore ONNX row-major
+      // order before flattening; integer tensors already retain ONNX order.
       Value permutation =
           createI32ShapeConstant(rewriter, op.getLoc(), {0, 3, 1, 2});
       input = createTFLOperation(rewriter, op.getLoc(), "tfl.transpose",

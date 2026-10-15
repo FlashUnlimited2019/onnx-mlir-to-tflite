@@ -100,16 +100,18 @@ FlatBuffer representation is insufficient.
 
 ## Layout contract
 
-Rank-4 floating-point activations use NHWC in the generated TFLite graph.
-Convolution filters and broadcast constants are transformed at compile time to
-the layouts required by their target operations. Other ranks normally retain
-their logical ONNX dimension order.
+The default `legacy` mode exposes rank-4 FP32 inputs and outputs in NHWC;
+other boundaries retain their ONNX axis order. The `experimental` mode preserves
+the original ONNX axis order of every graph input and output while optimizing
+internal layouts independently. Convolution and pooling regions remain
+channels-last, and constant filters are transformed at compile time to the
+layouts required by their target operations.
 
 Some rank-sensitive operations temporarily restore logical ONNX order or
 collapse compatible static dimensions, then convert the result back to its
-required representation. Graph inputs and outputs follow the same rank-based
-contract; no entry or exit transpose is inserted solely to expose an NCHW
-runtime interface.
+required representation. Experimental mode inserts boundary conversions where
+needed to preserve the public ONNX-order interface. Legacy mode does not insert
+entry or exit transposes solely to expose NCHW.
 
 Detailed layout and convolution rules are defined in the
 [layout policy](layout.md).

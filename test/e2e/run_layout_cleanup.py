@@ -29,6 +29,63 @@ def transpose(graph, value, perm, dtype=np.int32):
     )
 
 
+def singleton_view_cases(graph, rng):
+    """Exercise axis identity, copy boundaries, and observable shared views."""
+    for dtype in (np.float32, np.int32, np.int64, np.bool_):
+        for shape in ((1, 2, 3, 2, 4), (2, 1, 2, 1, 2), (1, 1, 1, 1, 1)):
+            for sharing in (False, True):
+                for _ in range(6):
+                    data = graph.input(shape, dtype)
+                    first = transpose(graph, data, rng.permutation(len(shape)))
+                    target = [d for d in first.shape if d != 1]
+                    # Include rank-zero results and retain some unit dimensions.
+                    if target and len(target) < 4:
+                        target.insert(int(rng.integers(len(target) + 1)), 1)
+                    result = graph.reshape(first, target)
+                    if sharing:
+                        graph.output(first)
+                    graph.output(result)
+                    graph.cases += 1
+        for shape, viewed, axis in (
+            ((1, 3, 2), (1, 3, 2, 1), 0),
+            ((2, 3), (1, 2, 3), 2),
+            ((2, 1, 3), (2, 3, 1), 2),
+            ((1, 1), (1, 1, 1), 1),
+            ((2, 2), (2, 1, 2), 0),
+            # No matching source axis, and a non-singleton merge: unchanged.
+            ((2, 3), (1, 2, 3), 0),
+            ((2, 3), (1, 6), 0),
+        ):
+            for sharing in (False, True):
+                for branches in (2, 3, 6):
+                    views = [
+                        graph.reshape(graph.input(shape, dtype), viewed)
+                        for _ in range(branches)
+                    ]
+                    if sharing:
+                        graph.output(views[0])
+                    graph.output(graph.concat(views, axis))
+                    graph.cases += 1
+        # Unequal widths along a non-singleton concat axis remain supported.
+        views = [
+            graph.reshape(graph.input((2, width), dtype), (1, 2, width))
+            for width in (1, 3, 5)
+        ]
+        graph.output(graph.concat(views, 2))
+        graph.cases += 1
+        for sharing in (False, True):
+            for perm in ((0, 2, 3, 1), (0, 3, 2, 1)):
+                views = []
+                for _ in range(3):
+                    # Only the first permutation preserves real-axis order.
+                    view = graph.reshape(graph.input((1, 2, 2), dtype), (1, 1, 2, 2))
+                    if sharing:
+                        graph.output(view)
+                    views.append(transpose(graph, view, perm))
+                graph.output(graph.concat(views, 0))
+                graph.cases += 1
+
+
 def make_graph():
     graph = Graph()
     rng = np.random.default_rng(173)
@@ -101,6 +158,7 @@ def make_graph():
         b = graph.op("tile", [a, graph.constant([1, 1, 2])], (2, 2, 4), dtype, np.tile)
         graph.output(transpose(graph, b, (1, 2, 0)))
         graph.cases += 1
+    singleton_view_cases(graph, rng)
     return graph
 
 
@@ -163,13 +221,14 @@ def main():
                     subgraph.Tensors(i).ShapeLength()
                     for i in range(subgraph.TensorsLength())
                 )
-                <= 4
+                <= 5  # Shared rank-five views deliberately remain observable.
             )
             allowed = {
                 schema.BuiltinOperator.RESHAPE,
                 schema.BuiltinOperator.TRANSPOSE,
                 schema.BuiltinOperator.TILE,
                 schema.BuiltinOperator.SLICE,
+                schema.BuiltinOperator.CONCATENATION,
             }
             assert all(
                 model.OperatorCodes(subgraph.Operators(i).OpcodeIndex()).BuiltinCode()

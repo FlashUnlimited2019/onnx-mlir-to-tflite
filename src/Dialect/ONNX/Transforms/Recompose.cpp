@@ -671,6 +671,14 @@ struct CombineParallelConv2DPattern : public OpRewritePattern<ONNXConvOp> {
 
   LogicalResult matchAndRewrite(
       ONNXConvOp convOp1, PatternRewriter &rewriter) const final {
+    // Concatenating complete filters and splitting contiguous output channels
+    // preserves parallel convolutions only for group=1. Grouped convolutions
+    // require interleaving filters per input group and undoing that ordering
+    // on the outputs; otherwise filters read the wrong input channels.
+    if (convOp1.getGroup() != 1)
+      return rewriter.notifyMatchFailure(
+          convOp1, "parallel grouped convolutions cannot be concatenated");
+
     Value input = convOp1.getX();
     if (!onnx_mlir::isRankedShapedType(input.getType()) ||
         !mlir::cast<ShapedType>(input.getType()).hasStaticShape())

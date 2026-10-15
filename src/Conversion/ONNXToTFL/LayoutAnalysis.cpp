@@ -598,14 +598,15 @@ int64_t ONNXToTFLLayoutAnalysis::applySupportedTypeEncodings() {
 
   module.walk([&](func::FuncOp function) {
     if (function->hasAttr("tf.entry_function")) {
-      // Internal permutations are not part of the non-rank-4 graph ABI.
+      // Experimental layouts are internal: every graph boundary retains its
+      // logical ONNX axis order, including values on the legacy fallback path.
       // Bridge them with logical identity Transposes: layout-aware lowering
       // materializes only the required physical permutation, while internal
       // consumers keep their optimized encodings. Compare permutations, not
       // shapes, because exchanging equal-sized axes still reorders values.
       auto needsBoundaryConversion = [](Type type) {
         auto tensor = dyn_cast<RankedTensorType>(type);
-        if (!tensor || tensor.getRank() == 4 || !tensor.getEncoding())
+        if (!tensor)
           return false;
         SmallVector<int64_t> layout =
             getONNXToTFLPhysicalToLogicalLayout(tensor);
@@ -613,6 +614,15 @@ int64_t ONNXToTFLLayoutAnalysis::applySupportedTypeEncodings() {
           if (static_cast<int64_t>(axis) != dimension)
             return true;
         return false;
+      };
+      auto publicType = [&](RankedTensorType type) {
+        type = stripONNXToTFLLayoutEncoding(type);
+        // An absent encoding means NHWC for rank-4 FP32, not identity.
+        // Override that default only on the public side of the bridge.
+        if (type.getRank() == 4 && type.getElementType().isF32())
+          return RankedTensorType::get(type.getShape(), type.getElementType(),
+              DenseI64ArrayAttr::get(function.getContext(), {0, 1, 2, 3}));
+        return type;
       };
       OpBuilder builder(function.getContext());
       auto bridge = [&](Value value, RankedTensorType resultType) {
@@ -626,7 +636,7 @@ int64_t ONNXToTFLLayoutAnalysis::applySupportedTypeEncodings() {
         if (!needsBoundaryConversion(argument.getType()))
           continue;
         auto internalType = cast<RankedTensorType>(argument.getType());
-        argument.setType(stripONNXToTFLLayoutEncoding(internalType));
+        argument.setType(publicType(internalType));
         builder.setInsertionPointToStart(&function.getBody().front());
         auto converted = bridge(argument, internalType);
         // Direct input-to-output aliases already have the public layout.
@@ -642,8 +652,7 @@ int64_t ONNXToTFLLayoutAnalysis::applySupportedTypeEncodings() {
           continue;
         auto internalType = cast<RankedTensorType>(operand.get().getType());
         operand.set(
-            bridge(operand.get(), stripONNXToTFLLayoutEncoding(internalType))
-                .getResult());
+            bridge(operand.get(), publicType(internalType)).getResult());
       }
     }
     SmallVector<Type> inputs;

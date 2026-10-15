@@ -4,7 +4,8 @@
 
 The layout contract is rank-sensitive:
 
-- Exactly rank-4 activations use NHWC inside the TFLite model.
+- In the default `legacy` mode, exactly rank-4 FP32 activations use NHWC
+  inside the TFLite model.
 - Rank-1, rank-2, rank-3, and rank-5-or-higher graph boundaries retain the ONNX
   axis order. Direct Conv3D fallback explicitly converts its local rank-5
   region from NCDHW to NDHWC and back; no rank-5 ABI conversion is implied.
@@ -12,16 +13,32 @@ The layout contract is rank-sensitive:
   activations. When broadcast with a rank-4 activation they are reshaped to
   `[1,1,C]`; their values are not reordered.
 
-The TFLite graph signature itself uses NHWC for rank-4 inputs and outputs. No
-runtime boundary Transpose is inserted: callers pass NHWC to TFLite while ONNX
+The legacy graph signature itself uses NHWC for rank-4 FP32 inputs and outputs.
+No runtime boundary Transpose is inserted: callers pass NHWC to TFLite while ONNX
 Runtime receives the corresponding NCHW array. `test/e2e/run_similarity.py`
 performs this boundary adaptation. The internal convolution/pooling region
 stays NHWC. Non-rank-4 graph inputs and outputs keep their ONNX order.
+
+In `experimental` mode, all graph inputs and outputs keep their original ONNX
+axis order, including rank four. Internal tensors may use different layouts;
+boundary Transposes connect these layouts only where needed. This also applies
+to operations that still use legacy lowering internally. Equal tensor extents
+do not imply equal layouts. Integer and boolean public tensors keep their ONNX
+axis order in both modes. Earlier experimental artifacts could expose mixed
+rank-4 layouts; see [Layout selection](convert-model.md#layout-selection) when
+regenerating or integrating them.
+
+The operation-level NHWC mappings below describe legacy lowering and
+channels-last internal regions, not a requirement on experimental graph inputs
+or outputs.
 
 ONNX Conv2D weights use `[M, C/group, kH, kW]` (OIHW). TFL `conv_2d` filters
 use `[M, kH, kW, C/group]` (OHWI), so constant weights are transposed
 `[0, 2, 3, 1]` at compile time. Bias remains a rank-1 `[M]` tensor and is not
 layout-transformed.
+Runtime filters are explicitly converted from their tracked layout to OHWI
+before regular, grouped, or depthwise kernel selection; equal extents do not
+make this permutation optional.
 For true depthwise Conv, the intermediate `[M,kH,kW,1]` filter is converted to
 TFL's `[1,kH,kW,M]` depthwise layout; TensorFlow folds this constant transpose
 during TFL optimization.
@@ -72,7 +89,7 @@ input/filter/bias by group, emit one ordinary Conv3D per group, and concatenate
 the NDHWC outputs. Thus future reduction rules can be inserted before this
 fallback without changing graph ABI or correctness.
 
-The conversion remaps rank-4 types once while lowering the graph rather than
+Legacy conversion remaps rank-4 types once while lowering the graph rather than
 inserting repeated runtime transposes. Rank-4 Concat and Slice axes, including
 the full vectors for positive-step StridedSlice and the axes used to implement
 negative steps with ReverseV2, are remapped. Transpose
@@ -93,7 +110,7 @@ suffix. Rank-1 `[W]` and rank-2 `[H,W]` operands are therefore reshaped to
 `[H,W,C]`. This preserves numpy broadcasting without transposing the main
 rank-4 activation away from NHWC.
 Importer-generated UpsampleAndPad inserts zeros directly along physical NHWC
-height and width, so decomposed ConvTranspose does not add graph-boundary
-transposes.
+height and width. Decomposed ConvTranspose does not require legacy graph-boundary
+transposes; experimental mode bridges its public ONNX-order interface as needed.
 The driver passes `--disable-conv-to-matmul` so `onnx.Conv` remains available
 to this layout-aware lowering.

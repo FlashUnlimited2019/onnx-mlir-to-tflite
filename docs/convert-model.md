@@ -63,7 +63,7 @@ replaced with a value. Switches in the last table take no value.
 
 | Syntax | Allowed value | Description |
 | --- | --- | --- |
-| `--layout-mode <mode>` | `legacy` (default)<br>`experimental` | Select the layout strategy. `legacy` uses the stable policy, with physical NHWC for rank-4 FP32 graph boundaries and activations. `experimental` enables conservative per-value layout propagation to reduce layout conversions; rank-4 boundary layouts outside convolutional regions may change. |
+| `--layout-mode <mode>` | `legacy` (default)<br>`experimental` | `legacy` uses NHWC for rank-4 FP32 inputs, outputs, and activations. `experimental` preserves every input/output's original ONNX axis order and optimizes internal layouts independently. |
 | `--layout-diagnostics <level>` | `none` (default)<br>`summary`<br>`values` | Control layout-analysis output. `none` prints nothing, `summary` prints aggregate statistics, and `values` prints the inferred layout of individual values and can produce substantial output. |
 | `--onnx-mlir <path>` | Executable path | Use a specific `onnx-mlir` executable instead of automatic discovery. |
 | `--onnx-mlir-opt <path>` | Executable path | Use a specific `onnx-mlir-opt` executable instead of automatic discovery. |
@@ -107,8 +107,23 @@ TFLite kernels require NHWC. In experimental mode, tensors outside those
 regions may retain their logical ONNX axis order when doing so avoids layout
 conversions.
 
-Non-rank-4 graph inputs and outputs retain their ONNX axis order in both
-modes, even when experimental mode uses a different layout internally.
+In `experimental` mode, **all graph inputs and outputs retain their original
+ONNX axis order**, including rank four. Ordinary NCHW image inputs/outputs
+therefore remain NCHW; other tensors retain their own ONNX dimension meanings.
+Necessary boundary transposes bridge the public interface and internal layouts.
+They may add runtime cost for convolutional models. Input/output names, order,
+and signature mappings are unaffected.
+
+This replaces the earlier experimental behavior where rank-4 boundaries could
+inherit different internal layouts. Regenerate affected models and stop applying
+external NCHW/NHWC adaptation to new experimental artifacts. Non-rank-4 boundaries
+and non-FP32 boundaries retain their ONNX order in legacy mode as before.
+
+For numerical validation, pass the same `--layout-mode legacy` or
+`--layout-mode experimental` to `test/e2e/run_similarity.py`. Do not infer layout
+from shape alone: equal-sized axes can hide a non-identity permutation. The
+test utility's `--layout-mode auto` is only a compatibility heuristic for older
+artifacts, not a reliable layout contract.
 
 ## Large models
 

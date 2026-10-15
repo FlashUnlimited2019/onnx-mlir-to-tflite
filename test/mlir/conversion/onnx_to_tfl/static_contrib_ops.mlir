@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: onnx-mlir-opt --convert-onnx-to-tfl --verify-each %s -split-input-file | FileCheck %s --implicit-check-not=onnx.Custom
-// RUN: onnx-mlir-opt --convert-onnx-to-tfl=layout-mode=experimental --verify-each %s -split-input-file | FileCheck %s --implicit-check-not=onnx.Custom
+// RUN: onnx-mlir-opt --convert-onnx-to-tfl --verify-each %s -split-input-file | FileCheck %s --check-prefixes=CHECK,LEGACY --implicit-check-not=onnx.Custom
+// RUN: onnx-mlir-opt --convert-onnx-to-tfl=layout-mode=experimental --verify-each %s -split-input-file | FileCheck %s --check-prefixes=CHECK,EXPERIMENTAL --implicit-check-not=onnx.Custom
 
 module {
   func.func @rms(%x: tensor<2x3x4x8xf32>, %gamma: tensor<8xf32>) -> tensor<2x3x4x8xf32> {
@@ -14,7 +14,8 @@ module {
 // CHECK: "tfl.mul"{{.*}}tensor<24x8xf32>
 // CHECK: "tfl.mean"{{.*}}keep_dims = true
 // CHECK: "tfl.rsqrt"{{.*}}tensor<24x1xf32>
-// CHECK: return {{.*}} : tensor<2x4x8x3xf32>
+// LEGACY: return {{.*}} : tensor<2x4x8x3xf32>
+// EXPERIMENTAL: return {{.*}} : tensor<2x3x4x8xf32>
 
 // -----
 
@@ -48,7 +49,8 @@ module {
 // CHECK: "tfl.pack"{{.*}}tensor<8x3x2x2xf32>
 // CHECK: "tfl.slice"{{.*}}tensor<8x3x4xf32>
 // CHECK: "tfl.concatenation"
-// CHECK: return {{.*}} : tensor<2x4x8x3xf32>
+// LEGACY: return {{.*}} : tensor<2x4x8x3xf32>
+// EXPERIMENTAL: return {{.*}} : tensor<2x3x4x8xf32>
 
 // -----
 
@@ -65,4 +67,5 @@ module {
 // CHECK-LABEL: func.func @main
 // CHECK: "tfl.softmax"
 // CHECK: "tfl.batch_matmul"
-// CHECK: return {{.*}} : tensor<2x3x16xf32>, tensor<2x3x4x2xf32>, tensor<2x3x4x2xf32>
+// LEGACY: return {{.*}} : tensor<2x3x16xf32>, tensor<2x3x4x2xf32>, tensor<2x3x4x2xf32>
+// EXPERIMENTAL: return {{.*}} : tensor<2x3x16xf32>, tensor<2x2x3x4xf32>, tensor<2x2x3x4xf32>

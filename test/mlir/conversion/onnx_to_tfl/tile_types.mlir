@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: onnx-mlir-opt --convert-onnx-to-tfl --verify-each %s -split-input-file | FileCheck %s
-// RUN: onnx-mlir-opt --convert-onnx-to-tfl="layout-mode=experimental" --verify-each %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --convert-onnx-to-tfl --verify-each %s -split-input-file | FileCheck %s --check-prefixes=CHECK,LEGACY
+// RUN: onnx-mlir-opt --convert-onnx-to-tfl="layout-mode=experimental" --verify-each %s -split-input-file | FileCheck %s --check-prefixes=CHECK,EXPERIMENTAL
 
 module {
   func.func @tile_i64(%input: tensor<64xi64>) -> tensor<256xi64> {
@@ -34,8 +34,10 @@ module {
 // CHECK: "tfl.tile"(%arg1, %[[I32]]) : (tensor<1x2x3x4xi32>, tensor<4xi32>) -> tensor<1x4x9x16xi32>
 // CHECK: %[[BOOL:.*]] = arith.constant dense<[1, 2, 3, 4]> : tensor<4xi32>
 // CHECK: "tfl.tile"(%arg2, %[[BOOL]]) : (tensor<1x2x3x4xi1>, tensor<4xi32>) -> tensor<1x4x9x16xi1>
-// CHECK: %[[NHWC:.*]] = arith.constant dense<[1, 3, 4, 2]> : tensor<4xi32>
-// CHECK: "tfl.tile"(%arg3, %[[NHWC]]) : (tensor<1x3x4x2xf32>, tensor<4xi32>) -> tensor<1x9x16x4xf32>
+// LEGACY: %[[NHWC:.*]] = arith.constant dense<[1, 3, 4, 2]> : tensor<4xi32>
+// LEGACY: "tfl.tile"(%arg3, %[[NHWC]]) : (tensor<1x3x4x2xf32>, tensor<4xi32>) -> tensor<1x9x16x4xf32>
+// EXPERIMENTAL: %[[LOGICAL:.*]] = arith.constant dense<[1, 2, 3, 4]> : tensor<4xi32>
+// EXPERIMENTAL: "tfl.tile"(%arg3, %[[LOGICAL]]) : (tensor<1x2x3x4xf32>, tensor<4xi32>) -> tensor<1x4x9x16xf32>
 
 // -----
 

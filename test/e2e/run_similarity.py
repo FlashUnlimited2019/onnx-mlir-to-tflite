@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare ONNX Runtime and TFLite with rank-4 NCHW/NHWC adaptation."""
+"""Compare ONNX Runtime and TFLite with explicit graph-boundary layouts."""
 
 from __future__ import annotations
 
@@ -25,6 +25,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-cosine", type=float, default=0.9999)
     parser.add_argument("--max-relative-euclidean", type=float, default=1e-3)
     parser.add_argument("--num-threads", type=int, default=1)
+    parser.add_argument(
+        "--layout-mode",
+        choices=("legacy", "experimental", "auto"),
+        default="legacy",
+        help=(
+            "boundary contract used to convert the model: legacy permutes rank-4 "
+            "FP32 to NHWC; experimental preserves ONNX order. auto is a "
+            "shape-based compatibility heuristic for older artifacts and is "
+            "ambiguous when permuted axes have equal extents"
+        ),
+    )
     parser.add_argument(
         "--onnx-reference",
         action="store_true",
@@ -71,27 +82,38 @@ def parse_integer_input_ranges(specifications: list[str]) -> dict[str, tuple[int
     return ranges
 
 
-def onnx_to_tfl_input(value: np.ndarray, expected_shape: tuple[int, ...]) -> np.ndarray:
-    """Adapt a rank-4 boundary only when the TFLite shape requires NHWC."""
+def adapt_boundary(value, expected_shape, layout_mode, permutation):
+    """Use the declared layout even when a permutation leaves the shape equal."""
+    if layout_mode not in ("legacy", "experimental", "auto"):
+        raise ValueError(f"unknown layout mode: {layout_mode}")
+    if layout_mode != "auto":
+        if layout_mode == "legacy" and value.ndim == 4 and value.dtype == np.float32:
+            value = value.transpose(permutation)
+        if value.shape != tuple(expected_shape):
+            raise ValueError(
+                f"{layout_mode} boundary shape mismatch: "
+                f"{value.shape} != {tuple(expected_shape)}"
+            )
+        return value
     if value.shape == expected_shape:
         return value
     if value.ndim == 4 and value.dtype == np.float32:
-        transposed = np.transpose(value, (0, 2, 3, 1))
+        transposed = np.transpose(value, permutation)
         if transposed.shape == expected_shape:
             return transposed
     return value
+
+
+def onnx_to_tfl_input(
+    value: np.ndarray, expected_shape: tuple[int, ...], layout_mode: str = "auto"
+) -> np.ndarray:
+    return adapt_boundary(value, expected_shape, layout_mode, (0, 2, 3, 1))
 
 
 def tfl_to_onnx_output(
-    value: np.ndarray, expected_shape: tuple[int, ...]
+    value: np.ndarray, expected_shape: tuple[int, ...], layout_mode: str = "auto"
 ) -> np.ndarray:
-    if value.shape == expected_shape:
-        return value
-    if value.ndim == 4 and value.dtype == np.float32:
-        transposed = np.transpose(value, (0, 3, 1, 2))
-        if transposed.shape == expected_shape:
-            return transposed
-    return value
+    return adapt_boundary(value, expected_shape, layout_mode, (0, 3, 1, 2))
 
 
 def main() -> int:
@@ -228,12 +250,12 @@ def main() -> int:
     print(
         f"random input: seed={args.seed}, FP32 normal(mean={args.mean}, "
         f"stddev={args.stddev}), bool Bernoulli(p=0.5); "
-        f"baseline={baseline_name}"
+        f"baseline={baseline_name}, layout={args.layout_mode}"
     )
     for ort_metadata, tfl_metadata in zip(input_metadata, tfl_inputs):
         onnx_value = ort_inputs[ort_metadata.name]
         expected_shape = tuple(int(dim) for dim in tfl_metadata["shape"])
-        tfl_value = onnx_to_tfl_input(onnx_value, expected_shape)
+        tfl_value = onnx_to_tfl_input(onnx_value, expected_shape, args.layout_mode)
         if tfl_value.shape != expected_shape:
             raise AssertionError(
                 f"input shape differs for {ort_metadata.name}: "
@@ -262,6 +284,7 @@ def main() -> int:
         tfl_to_onnx_output(
             interpreter.get_tensor(tfl_metadata["index"]),
             tuple(int(dim) for dim in ort_metadata.shape),
+            args.layout_mode,
         )
         for ort_metadata, tfl_metadata in zip(output_metadata, tfl_output_details)
     ]

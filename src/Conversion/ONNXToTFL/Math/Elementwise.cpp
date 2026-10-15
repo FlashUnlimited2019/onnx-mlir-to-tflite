@@ -7,6 +7,7 @@
 #include "src/Conversion/ONNXToTFL/ONNXToTFLCommon.hpp"
 
 #include <algorithm>
+#include <limits>
 
 using namespace mlir;
 
@@ -102,7 +103,8 @@ public:
     auto sourceResultType =
         dyn_cast<RankedTensorType>(op->getResult(0).getType());
     bool supportsI32 = tflName == "tfl.add";
-    bool supportsI64 = tflName == "tfl.add" || tflName == "tfl.mul";
+    bool supportsI64 =
+        tflName == "tfl.add" || tflName == "tfl.mul" || tflName == "tfl.div";
     bool isF32 = lhsType && lhsType.getElementType().isF32();
     bool isI32 = lhsType && lhsType.getElementType().isSignlessInteger(32);
     bool isI64 = lhsType && lhsType.getElementType().isSignlessInteger(64);
@@ -114,8 +116,59 @@ public:
         (!isF32 && !(isI32 && supportsI32) && !(isI64 && supportsI64))) {
       op.emitError() << "ONNXToTFL " << op->getName()
                      << " requires matching static FP32 operands/results, "
-                        "i32 for Add, or i64 for Add/Mul";
+                        "i32 for Add, or i64 for Add/Mul/bounded Div";
       return failure();
+    }
+
+    if (isI64 && tflName == "tfl.div") {
+      // TFLite's integer Div kernel accepts i32, not i64. Narrow only when
+      // the dividend is proven representable and the divisor is a positive
+      // i32 constant. Positivity also excludes INT32_MIN / -1 overflow.
+      Value lhs = adaptor.getOperands()[0];
+      Value rhs = adaptor.getOperands()[1];
+      auto fitsI32 = [](Value value) {
+        auto constants = getConstantIntValues(value);
+        if (succeeded(constants))
+          return llvm::all_of(*constants, [](int64_t v) {
+            return v >= std::numeric_limits<int32_t>::min() &&
+                   v <= std::numeric_limits<int32_t>::max();
+          });
+        Operation *producer = value.getDefiningOp();
+        if (!producer || producer->getName().getStringRef() != "tfl.cast" ||
+            producer->getNumOperands() != 1)
+          return false;
+        auto source =
+            dyn_cast<RankedTensorType>(producer->getOperand(0).getType());
+        return source && source.getElementType().isSignlessInteger(32);
+      };
+      auto divisors = getConstantIntValues(rhs);
+      if (sourceResultType.getRank() > 5 || !fitsI32(lhs) || failed(divisors) ||
+          divisors->empty() || !llvm::all_of(*divisors, [](int64_t v) {
+            return v > 0 && v <= std::numeric_limits<int32_t>::max();
+          }))
+        return op.emitError("i64 Div requires an i32-representable dividend, "
+                            "positive constant i32-range divisors, and "
+                            "result rank <= 5"),
+               failure();
+      auto narrow = [&](Value value, RankedTensorType type) {
+        return createTFLOperation(rewriter, op.getLoc(), "tfl.cast",
+            TypeRange{
+                RankedTensorType::get(type.getShape(), rewriter.getI32Type())},
+            ValueRange{value})
+            ->getResult(0);
+      };
+      auto quotientType = RankedTensorType::get(
+          sourceResultType.getShape(), rewriter.getI32Type());
+      Value quotient = createTFLOperation(rewriter, op.getLoc(), "tfl.div",
+          TypeRange{quotientType},
+          ValueRange{narrow(lhs, lhsType), narrow(rhs, rhsType)},
+          {getFusedActivationNone(rewriter)})
+                           ->getResult(0);
+      Value result = createTFLOperation(rewriter, op.getLoc(), "tfl.cast",
+          TypeRange{sourceResultType}, ValueRange{quotient})
+                         ->getResult(0);
+      rewriter.replaceOp(op, result);
+      return success();
     }
 
     Type resultType =

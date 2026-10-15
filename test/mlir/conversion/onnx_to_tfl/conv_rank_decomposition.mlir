@@ -119,7 +119,8 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 // CHECK-LABEL: func.func @main
-// CHECK: "tfl.reshape"{{.*}}tensor<4x8x9x2xf32>
+// CHECK: "tfl.reshape"{{.*}}tensor<2x4x8x9xf32>
+// CHECK: "tfl.transpose"{{.*}}tensor<4x8x9x2xf32>
 // CHECK: "tfl.conv_2d"{{.*}}tensor<4x8x9x3xf32>
 // CHECK: "tfl.transpose"{{.*}}tensor<1x3x4x8x9xf32>
 // CHECK-NOT: onnx.Conv
@@ -134,7 +135,8 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 // CHECK-LABEL: func.func @main
-// CHECK: "tfl.reshape"{{.*}}tensor<4x8x5x2xf32>
+// CHECK: "tfl.reshape"{{.*}}tensor<2x8x4x5xf32>
+// CHECK: "tfl.transpose"{{.*}}tensor<4x8x5x2xf32>
 // CHECK: "tfl.conv_2d"{{.*}}tensor<4x8x5x3xf32>
 // CHECK: "tfl.transpose"{{.*}}tensor<1x3x8x4x5xf32>
 // CHECK-NOT: onnx.Conv
@@ -149,7 +151,8 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 // CHECK-LABEL: func.func @main
-// CHECK: "tfl.reshape"{{.*}}tensor<4x8x6x2xf32>
+// CHECK: "tfl.reshape"{{.*}}tensor<2x8x4x6xf32>
+// CHECK: "tfl.transpose"{{.*}}tensor<4x8x6x2xf32>
 // CHECK: "tfl.conv_2d"{{.*}}tensor<4x8x6x4xf32>
 // CHECK: "tfl.transpose"{{.*}}tensor<1x4x8x4x6xf32>
 // CHECK-NOT: onnx.Conv

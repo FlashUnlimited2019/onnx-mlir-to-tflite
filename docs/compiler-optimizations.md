@@ -228,12 +228,15 @@ and output layouts agree. A logical transpose whose effect is already carried
 by the type encoding is removed. Operations that require a fixed physical
 layout receive explicit boundary conversions only where needed.
 
-Non-rank-4 graph inputs and outputs retain the logical ONNX axis order in
-both modes. Experimental layouts remain internal: boundary conversions are
-materialized when a non-identity permutation reaches an entry argument or
-returned value. This check uses axis permutations, not just tensor shapes,
-so equal-sized axes cannot hide an unintended data reordering. Existing
-rank-4 boundary layout policies are unchanged.
+All experimental graph inputs and outputs retain their logical ONNX axis
+order, including rank four and values lowered through the legacy fallback.
+Boundary conversions are materialized when a non-identity permutation reaches
+an entry argument or returned value; internal optimized layouts are retained.
+Rank-4 FP32 public types carry explicit identity encodings so the implicit
+NHWC fallback cannot change the interface. Checks compare axis permutations,
+not just shapes, so equal-sized axes cannot hide data reordering. Direct
+input/output aliases and signature port ordering are preserved. Legacy mode
+continues to expose rank-4 FP32 boundaries as NHWC.
 
 ### Diagnostics and selection
 
@@ -350,6 +353,12 @@ clearer in TFL form:
 | Attention head-layout chain | Multiple rank-4/rank-3 transpose and reshape views become one direct transpose | Exact head, sequence, width, flattened-batch shapes and composed permutations |
 | Broadcast add motion | A constant broadcast `Add` is moved before a transpose | The constant can be transposed at compile time and broadcast shapes remain valid |
 | Batch broadcast folding | `BroadcastTo` plus view operations feeding `BatchMatMul` becomes a singleton-batch operand | Leading source dimensions are singleton and the complete view chain preserves linear element order |
+| Singleton transpose rank reduction | `Transpose -> Reshape` becomes a lower-rank `Reshape -> Transpose`, or just a `Reshape` | The reshape only removes unit axes, the transpose has one use, and remaining axis identities are preserved; the replacement transpose is rank four or lower |
+| Concat view hoisting | Branch-local singleton reshapes, optionally followed by transposes that only move unit axes, become one reshape after a lower- or equal-rank `Concat` | At least two single-use branches, matching copy boundaries and source axes, static positive shapes, and no fused activation; no real dimension is split, merged, or reordered |
+| Adjacent transpose composition | Compose two permutations into one transpose, or bypass inverse permutations | Valid permutations and matching physical types; a nonidentity composition requires a single-use intermediate |
+| Pointwise layout motion | Move a transpose through FP32 pointwise arithmetic or activation and cancel matching input transposes | Static ranks at most four, right-aligned broadcasting remapped by axis identity, preserved operand order and activation attributes, no duplicated computation, fewer layout copies, and no increase in view count |
+| Pointwise singleton views | Move a singleton-only reshape through pointwise computation and bypass matching operand reshapes | Broadcast axes and inferred output rank remain valid, no real dimensions are split or merged, ranks at most four, and a strict reduction in view count |
+| Padding layout round trip | `Transpose -> Pad/PadV2 -> inverse Transpose` becomes reordered padding | Static FP32 ranks at most four, nonnegative constant paddings, exact output shape, preserved scalar fill value, and a single-use padding result |
 
 The broadcast-folding proof checks the exact linear index mapping for bounded
 static tensors. Optional scalar scaling is retained on the unbroadcast source.
@@ -402,11 +411,12 @@ If a proof fails, the pattern does not rewrite the graph. The operation then
 uses its established lowering or causes normal full-conversion failure if the
 configuration is unsupported.
 
-Post-lowering matrix and layout rewriting is restricted to existing and newly
-created `BatchMatMul` and `Transpose` roots. Static index rewriting uses its own
-operation whitelist and evaluation budgets. Generic folding, constant CSE, and
-region simplification are disabled in these local phases so they do not become
-unbounded whole-module optimizers.
+Post-lowering matrix and transformer rewriting uses existing and newly created
+`BatchMatMul` and `Transpose` roots. Subsequent local layout cleanup targets
+`Transpose`, `Slice`, `Reshape`, and `Concat` roots. Static index rewriting uses
+its own operation whitelist and evaluation budgets. Generic folding, constant
+CSE, and region simplification are disabled in these local phases so they do
+not become unbounded whole-module optimizers.
 
 Regression coverage includes positive and negative structural matches,
 batch-rank reduction with and without broadcasting, layout diagnostics,
@@ -419,6 +429,15 @@ optimizer. Run it with `--help` for converter and work-directory options.
 Concat/Slice uses, and static-mask selection against NumPy across ranks 1–5,
 both layouts, and both TFL optimizer settings, including overflow fallbacks and
 bitwise preservation of floating-point exceptional values and signed zero.
+`test/e2e/run_layout_cleanup.py` checks local transpose, slice, tile, and
+singleton-view rewrites with an independent element-copy oracle, including
+equal-sized axes, shared branches, both layouts, optional TFL optimization,
+and runtime delegation.
+`test/e2e/run_pointwise_layouts.py` checks pointwise broadcasting, scalar ranks,
+unit-axis views, shared branches, repeated operands, fused activations, and
+padding against NumPy in both layouts, with and without downstream optimization
+and runtime delegation. Arithmetic checks use explicit tolerances; copy-only
+fixtures also exercise exceptional floating-point values.
 `test/e2e/run_static_padded_nms.py` checks padded suppression against ONNX Runtime
 across box formats, batches, classes, selection limits, threshold boundaries,
 ties, empty selections, degenerate boxes, both workspace paths, and rejected

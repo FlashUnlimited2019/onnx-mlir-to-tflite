@@ -35,14 +35,16 @@ public:
     bool supportedInputElementType =
         sourceInputType &&
         (sourceInputType.getElementType().isF32() ||
-            sourceInputType.getElementType().isSignlessInteger(32));
+            sourceInputType.getElementType().isSignlessInteger(32) ||
+            sourceInputType.getElementType().isSignlessInteger(64));
     if (!sourceInputType || !sourceResultType ||
         !sourceInputType.hasStaticShape() || !supportedInputElementType ||
         !sourceResultType.hasStaticShape() ||
         !sourceResultType.getElementType().isSignlessInteger(64)) {
-      op.emitError() << "ONNXToTFL " << onnxName
-                     << " requires a static FP32 or i32 input and a static "
-                        "i64 result tensor";
+      op.emitError()
+          << "ONNXToTFL " << onnxName
+          << " requires a static FP32, i32, or i64 input and a static "
+             "i64 result tensor";
       return failure();
     }
 
@@ -89,10 +91,21 @@ public:
                   ->getResult(0);
     }
 
+    // Int64 data is supported under the signed-int32 value-range contract.
+    // Keep public types and output indices int64; only narrow the comparison
+    // input, since the runtime ArgMin/ArgMax kernels do not accept int64 data.
+    if (sourceInputType.getElementType().isSignlessInteger(64)) {
+      auto narrowType = RankedTensorType::get(
+          sourceInputType.getShape(), rewriter.getI32Type());
+      input = createTFLOperation(rewriter, op.getLoc(), "tfl.cast",
+          TypeRange{narrowType}, ValueRange{input})
+                  ->getResult(0);
+    }
+
     if (op.getSelectLastIndex() != 0) {
       Value reverseAxis = createI32ShapeConstant(rewriter, op.getLoc(), {axis});
       input = createTFLOperation(rewriter, op.getLoc(), "tfl.reverse_v2",
-          TypeRange{sourceInputType}, ValueRange{input, reverseAxis})
+          TypeRange{input.getType()}, ValueRange{input, reverseAxis})
                   ->getResult(0);
     }
 
