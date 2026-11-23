@@ -5,6 +5,7 @@
 //===------------------ Concat.cpp - ONNX Operations ----------------------===//
 //
 // Copyright 2019-2022 The IBM Research Authors.
+// Modified by FlashUnlimited2019 in 2026.
 //
 // =============================================================================
 //
@@ -109,6 +110,9 @@ LogicalResult ONNXConcatOpShapeHelper::computeShape() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ONNXConcatOp::verify() {
+  if (getOperands().empty())
+    return emitOpError("requires at least one input");
+
   // Cannot verify semantics if the operands do not have a known shape yet.
   ONNXConcatOpAdaptor operandAdaptor(*this);
   if (!hasShapeAndRank(getOperation()))
@@ -126,6 +130,9 @@ LogicalResult ONNXConcatOp::verify() {
     }
   }
 
+  // All inputs may be empty vectors. Keep a valid type for axis validation.
+  if (!commonType)
+    commonType = mlir::cast<ShapedType>(getOperand(0).getType());
   ArrayRef<int64_t> commonShape = commonType.getShape();
   int64_t commonRank = commonShape.size();
   int64_t axisIndex = getAxis();

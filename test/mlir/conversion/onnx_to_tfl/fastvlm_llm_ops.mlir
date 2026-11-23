@@ -2,7 +2,7 @@
 
 // RUN: onnx-mlir-opt --convert-onnx-to-tfl --verify-each %s -split-input-file | FileCheck %s
 
-// FastVLM's last-token selection computes an absolute-value score over the
+// Last-token selection computes an absolute-value score over the
 // input embeddings before ReduceMax/Greater/Where/GatherElements.
 module {
   func.func @abs_embedding(%input: tensor<1x4x8xf32>) -> tensor<1x4x8xf32> {
@@ -17,7 +17,7 @@ module {
 
 // -----
 
-// FastVLM constructs token positions with an i64 Where before reducing and
+// Construct token positions with an i64 Where before reducing and
 // gathering the final valid-token logits. Include scalar broadcasting.
 module {
   func.func @where_i64(%data: tensor<1x4x4xf32>, %score: tensor<1x4xf32>, %positions: tensor<1x4xi64>) -> tensor<1x1x4xf32> {
@@ -40,8 +40,8 @@ module {
 // CHECK: "tfl.select_v2"{{.*}} : (tensor<1x4xi1>, tensor<1x4xi64>, tensor<i64>) -> tensor<1x4xi64>
 // CHECK: "tfl.reduce_max"{{.*}} : (tensor<1x4xi64>, tensor<1xi32>) -> tensor<1xi64>
 // CHECK: "tfl.reshape"{{.*}} : (tensor<1xi64>, tensor<3xi32>) -> tensor<1x1x1xi64>
-// CHECK: "tfl.broadcast_to"{{.*}} : (tensor<1x1x1xi64>, tensor<3xi32>) -> tensor<1x1x4xi64>
-// CHECK: "tfl.cast"{{.*}} : (tensor<1x1x4xi64>) -> tensor<1x1x4xi32>
-// CHECK: "tfl.concatenation"{{.*}} : (tensor<1x1x4x1xi32>, tensor<1x1x4x1xi32>, tensor<1x1x4x1xi32>) -> tensor<1x1x4x3xi32>
-// CHECK: "tfl.gather_nd"{{.*}} : (tensor<1x4x4xf32>, tensor<1x1x4x3xi32>) -> tensor<1x1x4xf32>
+// CHECK-NOT: "tfl.broadcast_to"
+// CHECK-NOT: "tfl.concatenation"
+// CHECK: "tfl.gather"{{.*}} {axis = 1 : i32, batch_dims = 0 : i32} : (tensor<1x4x4xf32>, tensor<1xi64>) -> tensor<1x1x4xf32>
+// CHECK-NOT: "tfl.gather_nd"
 // CHECK-NOT: onnx.

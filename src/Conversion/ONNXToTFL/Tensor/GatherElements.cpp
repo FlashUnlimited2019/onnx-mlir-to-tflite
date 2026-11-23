@@ -14,6 +14,202 @@ using namespace mlir;
 namespace onnx_mlir {
 namespace {
 
+// Recognize complete, constant row windows, not just a few sampled indices.
+// For each block of P rows, indices[r,c] = A - (r % P)*S + c,
+// where A = (P-1)*S. Flattening a block of [P,D] starting at A and
+// reinterpreting it with row width D-S gives exactly these windows:
+//   A + r*(D-S) + c = r*D + (A-r*S+c).
+// The cropped interval ends at P*D-S, so no padding or cross-block read is
+// needed. This avoids materializing an output-sized GatherNd coordinate table.
+FailureOr<Value> lowerConstantRowWindows(ONNXGatherElementsOp op,
+    ConversionPatternRewriter &rewriter, Value data, RankedTensorType dataType,
+    RankedTensorType resultType, ArrayRef<int64_t> indices) {
+  if (dataType.getRank() != 2 || resultType.getRank() != 2 ||
+      dataType.getShape()[0] != resultType.getShape()[0])
+    return failure();
+  int64_t rows = dataType.getShape()[0], width = dataType.getShape()[1];
+  int64_t columns = resultType.getShape()[1];
+  if (rows <= 0 || width <= 0 || columns <= 0 ||
+      indices.size() != static_cast<uint64_t>(rows * columns))
+    return failure();
+  auto normalize = [width](int64_t index) -> int64_t {
+    if (index < -width || index >= width)
+      return -1;
+    return index < 0 ? index + width : index;
+  };
+  int64_t start = normalize(indices.front());
+  if (start < 0 || columns > width - start)
+    return failure();
+  int64_t step = 0, period = 1;
+  if (rows > 1) {
+    int64_t next = normalize(indices[columns]);
+    if (next < 0 || next > start)
+      return failure();
+    step = start - next;
+    if (step != 0) {
+      if (start % step != 0)
+        return failure();
+      period = start / step + 1;
+      if (rows % period != 0 || step >= width || columns > width - step ||
+          // Avoid copying a wide intermediate just to gather a narrow window.
+          width - step > 2 * columns ||
+          period > std::numeric_limits<int32_t>::max() / width)
+        return failure();
+    }
+  }
+  int64_t flat = 0;
+  for (int64_t row = 0; row < rows; ++row) {
+    int64_t expected = start - (row % period) * step;
+    for (int64_t column = 0; column < columns; ++column)
+      if (normalize(indices[flat++]) != expected + column)
+        return failure();
+  }
+
+  Location loc = op.getLoc();
+  auto reshape = [&](Value input, ArrayRef<int64_t> shape) -> Value {
+    auto type = RankedTensorType::get(shape, dataType.getElementType());
+    Value dims = createI32ShapeConstant(rewriter, loc, shape);
+    return createTFLOperation(
+        rewriter, loc, "tfl.reshape", TypeRange{type}, ValueRange{input, dims})
+        ->getResult(0);
+  };
+  auto slice = [&](Value input, ArrayRef<int64_t> begin,
+                   ArrayRef<int64_t> shape) -> Value {
+    auto type = RankedTensorType::get(shape, dataType.getElementType());
+    Value starts = createI32ShapeConstant(rewriter, loc, begin);
+    Value sizes = createI32ShapeConstant(rewriter, loc, shape);
+    return createTFLOperation(rewriter, loc, "tfl.slice", TypeRange{type},
+        ValueRange{input, starts, sizes})
+        ->getResult(0);
+  };
+  if (step == 0)
+    return slice(data, {0, start}, {rows, columns});
+  int64_t batches = rows / period, rowWidth = width - step;
+  Value blocks = reshape(data, {batches, period * width});
+  Value shifted = slice(blocks, {0, start}, {batches, period * rowWidth});
+  Value windows = reshape(shifted, {rows, rowWidth});
+  return slice(windows, {0, 0}, {rows, columns});
+}
+
+// A broadcast index that is constant across each complete trailing slice
+// selects rows, not individual scalar coordinates. Keep per-prefix indices
+// distinct with batch_dims=1; a vector shared by every prefix uses
+// batch_dims=0. Partial slices and partially broadcast batch prefixes use the
+// general path.
+FailureOr<Value> lowerBroadcastRowGather(ONNXGatherElementsOp op,
+    ConversionPatternRewriter &rewriter, Value data, Value indices,
+    RankedTensorType dataType, RankedTensorType resultType, int64_t axis,
+    bool logicalData) {
+  Operation *expand = indices.getDefiningOp();
+  if (!expand || expand->getName().getStringRef() != "tfl.broadcast_to" ||
+      expand->getNumOperands() != 2 || expand->getNumResults() != 1)
+    return failure();
+  Value compact = expand->getOperand(0);
+  auto compactType = dyn_cast<RankedTensorType>(compact.getType());
+  auto expandedType = dyn_cast<RankedTensorType>(indices.getType());
+  int64_t rank = dataType.getRank();
+  if (!compactType || !compactType.hasStaticShape() ||
+      compactType.getEncoding() || !expandedType ||
+      expandedType.getShape() != resultType.getShape() ||
+      compactType.getRank() > rank ||
+      compactType.getElementType() != expandedType.getElementType() ||
+      (!compactType.getElementType().isSignlessInteger(32) &&
+          !compactType.getElementType().isSignlessInteger(64)))
+    return failure();
+  auto targetShape = getConstantIntValues(expand->getOperand(1));
+  if (failed(targetShape) || !llvm::equal(*targetShape, resultType.getShape()))
+    return failure();
+  SmallVector<int64_t> aligned(rank, 1);
+  std::copy(compactType.getShape().begin(), compactType.getShape().end(),
+      aligned.end() - compactType.getRank());
+  bool shared = true, batched = true;
+  int64_t batches = 1, width = 1;
+  for (int64_t i = 0; i < rank; ++i) {
+    int64_t dim = dataType.getDimSize(i), out = resultType.getDimSize(i);
+    if (aligned[i] <= 0 || (aligned[i] != 1 && aligned[i] != out) ||
+        (i != axis && dim != out) || (i > axis && aligned[i] != 1))
+      return failure();
+    if (i < axis) {
+      shared &= aligned[i] == 1;
+      batched &= aligned[i] == dim;
+      if (dim > std::numeric_limits<int32_t>::max() / batches)
+        return failure();
+      batches *= dim;
+    } else if (i > axis) {
+      if (dim > std::numeric_limits<int32_t>::max() / width)
+        return failure();
+      width *= dim;
+    }
+  }
+  if ((!shared && !batched) || aligned[axis] != resultType.getDimSize(axis) ||
+      compactType.getNumElements() >= expandedType.getNumElements())
+    return failure();
+
+  Location loc = op.getLoc();
+  auto reshape = [&](Value value, ArrayRef<int64_t> shape) -> Value {
+    auto type = RankedTensorType::get(
+        shape, cast<RankedTensorType>(value.getType()).getElementType());
+    if (value.getType() == type)
+      return value;
+    return createTFLOperation(rewriter, loc, "tfl.reshape", TypeRange{type},
+        {value, createI32ShapeConstant(rewriter, loc, shape)})
+        ->getResult(0);
+  };
+  // The legacy FP32 rank-four operand has not yet been restored by the caller.
+  if (!logicalData && dataType.getElementType().isF32() && rank == 4)
+    data =
+        createTFLOperation(rewriter, loc, "tfl.transpose", TypeRange{dataType},
+            {data, createI32ShapeConstant(rewriter, loc, {0, 3, 1, 2})})
+            ->getResult(0);
+  int64_t length = resultType.getDimSize(axis);
+  SmallVector<int64_t> indexShape = shared
+                                        ? SmallVector<int64_t>{length}
+                                        : SmallVector<int64_t>{batches, length};
+  compact = reshape(compact, indexShape);
+  auto indexType = cast<RankedTensorType>(compact.getType());
+  auto scalarType = RankedTensorType::get({}, indexType.getElementType());
+  auto scalar = [&](int64_t value) -> Value {
+    return arith::ConstantOp::create(rewriter, loc, scalarType,
+        DenseIntElementsAttr::get(scalarType,
+            APInt(indexType.getElementType().getIntOrFloatBitWidth(), value)));
+  };
+  Value zero = scalar(0), extent = scalar(dataType.getDimSize(axis));
+  auto conditionType = RankedTensorType::get(indexShape, rewriter.getI1Type());
+  Value negative = createTFLOperation(
+      rewriter, loc, "tfl.less", TypeRange{conditionType}, {compact, zero})
+                       ->getResult(0);
+  Value toWrap = compact;
+  if (indexType.getElementType().isSignlessInteger(32) &&
+      dataType.getDimSize(axis) > std::numeric_limits<int32_t>::max() / 2) {
+    // Even the unselected Add branch must not overflow for a valid positive
+    // index into a very large axis. Negative indices still wrap unchanged.
+    toWrap = createTFLOperation(
+        rewriter, loc, "tfl.minimum", TypeRange{indexType}, {compact, zero})
+                 ->getResult(0);
+  }
+  Value wrapped =
+      createTFLOperation(rewriter, loc, "tfl.add", TypeRange{indexType},
+          {toWrap, extent}, {getFusedActivationNone(rewriter)})
+          ->getResult(0);
+  compact = createTFLOperation(rewriter, loc, "tfl.select_v2",
+      TypeRange{indexType}, {negative, wrapped, compact})
+                ->getResult(0);
+  RankedTensorType gatheredType = resultType;
+  if (!shared) {
+    data = reshape(data, {batches, dataType.getDimSize(axis), width});
+    gatheredType = RankedTensorType::get(
+        {batches, length, width}, dataType.getElementType());
+  }
+  Value result = createTFLOperation(rewriter, loc, "tfl.gather",
+      TypeRange{gatheredType}, {data, compact},
+      {rewriter.getNamedAttr(
+           "axis", rewriter.getI32IntegerAttr(shared ? axis : 1)),
+          rewriter.getNamedAttr(
+              "batch_dims", rewriter.getI32IntegerAttr(shared ? 0 : 1))})
+                     ->getResult(0);
+  return reshape(result, resultType.getShape());
+}
+
 class GatherElementsLowering final
     : public OpConversionPattern<ONNXGatherElementsOp> {
 public:
@@ -28,11 +224,16 @@ public:
         dyn_cast<RankedTensorType>(op.getIndices().getType());
     auto sourceResultType = dyn_cast<RankedTensorType>(op.getType());
     if (!sourceDataType || !sourceIndicesType || !sourceResultType ||
-        failed(validateStaticF32Tensor(
-            op, data.getType(), "GatherElements data")) ||
-        failed(validateStaticF32Tensor(
-            op, sourceResultType, "GatherElements result")))
-      return failure();
+        !sourceDataType.hasStaticShape() ||
+        !sourceResultType.hasStaticShape() ||
+        sourceDataType.getElementType() != sourceResultType.getElementType() ||
+        (!sourceDataType.getElementType().isF32() &&
+            !sourceDataType.getElementType().isSignlessInteger(32) &&
+            !sourceDataType.getElementType().isSignlessInteger(64)))
+      return op.emitError("GatherElements requires matching static FP32, i32 "
+                          "or i64 data/result tensors"),
+             failure();
+    bool isF32 = sourceDataType.getElementType().isF32();
 
     int64_t rank = sourceDataType.getRank();
     if (rank < 1 || rank > 5 || sourceIndicesType.getRank() != rank ||
@@ -91,6 +292,34 @@ public:
     if (outputElements > std::numeric_limits<int32_t>::max() / rank) {
       op.emitError("GatherElements index tensor is too large");
       return failure();
+    }
+
+    if (rank == 2 && axis == 1 && succeeded(indexValues)) {
+      FailureOr<Value> windows = lowerConstantRowWindows(
+          op, rewriter, data, logicalDataType, logicalResultType, *indexValues);
+      if (succeeded(windows)) {
+        if (hasPerValueLayout) {
+          windows = convertTFLValueLayout(rewriter, op.getLoc(), *windows,
+              logicalResultType, identityLayout,
+              getONNXToTFLPhysicalToLogicalLayout(sourceResultType));
+          if (failed(windows))
+            return failure();
+        }
+        rewriter.replaceOp(op, *windows);
+        return success();
+      }
+    }
+
+    auto rows = lowerBroadcastRowGather(op, rewriter, data, indices,
+        logicalDataType, logicalResultType, axis, hasPerValueLayout);
+    if (succeeded(rows)) {
+      auto result = convertTFLValueLayout(rewriter, op.getLoc(), *rows,
+          logicalResultType, identityLayout,
+          getONNXToTFLPhysicalToLogicalLayout(sourceResultType));
+      if (failed(result))
+        return failure();
+      rewriter.replaceOp(op, *result);
+      return success();
     }
 
     // A full coordinate selects one scalar. Flatten the tuple prefix rather
@@ -241,7 +470,7 @@ public:
 
     // The per-value path has already restored logical dimension order. The
     // legacy path retains its established rank-4 NCHW/NHWC boundary.
-    if (!hasPerValueLayout && rank == 4) {
+    if (!hasPerValueLayout && isF32 && rank == 4) {
       Value permutation =
           createI32ShapeConstant(rewriter, op.getLoc(), {0, 3, 1, 2});
       data = createTFLOperation(rewriter, op.getLoc(), "tfl.transpose",
@@ -273,7 +502,7 @@ public:
       rewriter.replaceOp(op, *result);
       return success();
     }
-    if (rank != 4) {
+    if (rank != 4 || !isF32) {
       rewriter.replaceOp(op, gathered);
       return success();
     }

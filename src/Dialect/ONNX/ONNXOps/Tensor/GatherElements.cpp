@@ -5,6 +5,7 @@
 //===------------------ GatherElements.cpp - ONNX Operations --------------===//
 //
 // Copyright 2019-2022 The IBM Research Authors.
+// Modified by FlashUnlimited2019 in 2026.
 //
 // =============================================================================
 //
@@ -78,8 +79,10 @@ LogicalResult ONNXGatherElementsOp::verify() {
         return success(); // Return success to allow the parsing of MLIR with
                           // elided attributes
       }
-      for (IntegerAttr value : valueAttribute.getValues<IntegerAttr>()) {
-        int64_t index = value.getInt();
+      // Read integer payloads directly: boxing each element as IntegerAttr
+      // needlessly re-enters the context uniquer for large constant indices.
+      for (APInt value : valueAttribute.getValues<APInt>()) {
+        int64_t index = value.getSExtValue();
         if (index >= -dataDimAtAxis && index < dataDimAtAxis)
           continue;
 

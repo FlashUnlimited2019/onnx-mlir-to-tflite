@@ -1890,16 +1890,23 @@ struct RemoveDimZeroInputInConcatPattern
       // Scalar with rank 0. Dim size is one (not zero).
       if (shape.size() == 0)
         continue;
-      if (shape[axis] == 0)
+      int64_t rank = static_cast<int64_t>(shape.size());
+      int64_t inputAxis = axis < 0 ? axis + rank : axis;
+      if (inputAxis < 0 || inputAxis >= rank)
+        continue;
+      if (shape[inputAxis] == 0)
         indices.emplace_back(i);
     }
     if (indices.empty())
       return rewriter.notifyMatchFailure(
           concatOp, "No operand whose dim at axis is zero");
+    if (indices.size() == inputs.size())
+      return rewriter.notifyMatchFailure(
+          concatOp, "Keep operands when every input is empty");
 
-    // Rewrite: remove operands whose dim at axis is zero.
+    // Erase backwards so earlier removals do not shift later operand indices.
     rewriter.modifyOpInPlace(concatOp, [&]() {
-      for (int64_t idx : indices)
+      for (int64_t idx : llvm::reverse(indices))
         concatOp.getOperation()->eraseOperand(idx);
     });
     return success();
@@ -1929,10 +1936,13 @@ struct RemoveEmptyInputInConcatPattern : public OpRewritePattern<ONNXConcatOp> {
     if (indices.empty())
       return rewriter.notifyMatchFailure(
           concatOp, "No operand whose shape is <0xdtype>");
+    if (indices.size() == inputs.size())
+      return rewriter.notifyMatchFailure(
+          concatOp, "Keep operands when every input is empty");
 
-    // Rewrite: remove operands whose shape is <0xdtype>.
+    // Erase backwards so earlier removals do not shift later operand indices.
     rewriter.modifyOpInPlace(concatOp, [&]() {
-      for (int64_t idx : indices)
+      for (int64_t idx : llvm::reverse(indices))
         concatOp.getOperation()->eraseOperand(idx);
     });
     if (concatOp.getOperands().size() == 1)

@@ -139,67 +139,15 @@ FailureOr<Value> createGroupedConv2D(Operation *op, Value input, Value filter,
       filterType.getShape()[0] != outputChannels ||
       filterType.getShape()[3] != inputChannels / group ||
       biasType.getShape()[0] != outputChannels) {
-    op->emitError("invalid grouped Conv2D decomposition shapes");
+    op->emitError("invalid grouped Conv2D shapes");
     return failure();
   }
 
-  int64_t inputChannelsPerGroup = inputChannels / group;
-  int64_t outputChannelsPerGroup = outputChannels / group;
-  SmallVector<int64_t> inputSplits(group, inputChannelsPerGroup);
-  SmallVector<int64_t> outputSplits(group, outputChannelsPerGroup);
-  Value inputSplitSizes =
-      createI32ShapeConstant(rewriter, op->getLoc(), inputSplits);
-  Value outputSplitSizes =
-      createI32ShapeConstant(rewriter, op->getLoc(), outputSplits);
-  Value inputAxis = createI32ScalarTensorConstant(rewriter, op->getLoc(), 3);
-  Value outputAxis = createI32ScalarTensorConstant(rewriter, op->getLoc(), 0);
-  SmallVector<NamedAttribute> splitAttributes{
-      rewriter.getNamedAttr("num_splits", rewriter.getI32IntegerAttr(group))};
-
-  SmallVector<Type> inputPartTypes;
-  SmallVector<Type> filterPartTypes;
-  SmallVector<Type> biasPartTypes;
-  SmallVector<Type> resultPartTypes;
-  for (int64_t index = 0; index < group; ++index) {
-    inputPartTypes.push_back(RankedTensorType::get(
-        {inputType.getShape()[0], inputType.getShape()[1],
-            inputType.getShape()[2], inputChannelsPerGroup},
-        inputType.getElementType()));
-    filterPartTypes.push_back(RankedTensorType::get(
-        {outputChannelsPerGroup, filterType.getShape()[1],
-            filterType.getShape()[2], filterType.getShape()[3]},
-        filterType.getElementType()));
-    biasPartTypes.push_back(RankedTensorType::get(
-        {outputChannelsPerGroup}, biasType.getElementType()));
-    resultPartTypes.push_back(RankedTensorType::get(
-        {resultType.getShape()[0], resultType.getShape()[1],
-            resultType.getShape()[2], outputChannelsPerGroup},
-        resultType.getElementType()));
-  }
-  Operation *inputParts = createTFLOperation(rewriter, op->getLoc(),
-      "tfl.split_v", TypeRange{inputPartTypes},
-      ValueRange{input, inputSplitSizes, inputAxis}, splitAttributes);
-  Operation *filterParts = createTFLOperation(rewriter, op->getLoc(),
-      "tfl.split_v", TypeRange{filterPartTypes},
-      ValueRange{filter, outputSplitSizes, outputAxis}, splitAttributes);
-  Operation *biasParts = createTFLOperation(rewriter, op->getLoc(),
-      "tfl.split_v", TypeRange{biasPartTypes},
-      ValueRange{bias, outputSplitSizes, outputAxis}, splitAttributes);
-
-  SmallVector<Value> results;
-  for (int64_t index = 0; index < group; ++index) {
-    Operation *conv = createTFLOperation(rewriter, op->getLoc(), "tfl.conv_2d",
-        TypeRange{resultPartTypes[index]},
-        ValueRange{inputParts->getResult(index), filterParts->getResult(index),
-            biasParts->getResult(index)},
-        convAttributes);
-    results.push_back(conv->getResult(0));
-  }
-  SmallVector<NamedAttribute> concatAttributes{
-      rewriter.getNamedAttr("axis", rewriter.getI32IntegerAttr(3)),
-      getFusedActivationNone(rewriter)};
-  return createTFLOperation(rewriter, op->getLoc(), "tfl.concatenation",
-      TypeRange{resultType}, results, concatAttributes)
+  // The builtin Conv2D kernel infers groups from input channels divided by
+  // filter input channels. Preserve OHWI weights and output-channel order;
+  // splitting each group into a separate invocation is unnecessary.
+  return createTFLOperation(rewriter, op->getLoc(), "tfl.conv_2d",
+      TypeRange{resultType}, ValueRange{input, filter, bias}, convAttributes)
       ->getResult(0);
 }
 

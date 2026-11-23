@@ -28,9 +28,10 @@ module {
 }
 // CHECK-LABEL: func.func @main(%arg0: tensor<1x2x2x3xf32>{{( \{[^}]*\})?}}) -> (tensor<1x2x2x3xf32>{{( \{[^}]*\})?}})
 // CHECK: arith.constant dense<{{.*true.*false.*}}> : tensor<1x1x2x2xi1>
-// CHECK: "tfl.transpose"(%arg0, {{.*}}) : (tensor<1x2x2x3xf32>, tensor<4xi32>) -> tensor<1x3x2x2xf32>
-// CHECK: "tfl.select_v2"({{.*}}) : (tensor<1x1x2x2xi1>, tensor<1x3x2x2xf32>, tensor<f32>) -> tensor<1x3x2x2xf32>
-// CHECK: "tfl.transpose"({{.*}}) : (tensor<1x3x2x2xf32>, tensor<4xi32>) -> tensor<1x2x2x3xf32>
+// CHECK-NOT: "tfl.transpose"
+// CHECK: "tfl.reshape"({{.*}}) : (tensor<1x1x2x2xi1>, tensor<4xi32>) -> tensor<1x2x2x1xi1>
+// CHECK: "tfl.select_v2"({{.*}}, %arg0, {{.*}}) : (tensor<1x2x2x1xi1>, tensor<1x2x2x3xf32>, tensor<f32>) -> tensor<1x2x2x3xf32>
+// CHECK-NOT: "tfl.transpose"
 
 // -----
 

@@ -90,6 +90,48 @@ def models():
     )
     yield helper.make_graph(
         [],
+        "scalar_entry_passthrough",
+        [
+            value("z_float", []),
+            value("a_int64", [], TensorProto.INT64),
+            value("int32", [], TensorProto.INT32),
+            value("flag", [], TensorProto.BOOL),
+        ],
+        [
+            value("flag", [], TensorProto.BOOL),
+            value("a_int64", [], TensorProto.INT64),
+            value("z_float", []),
+            value("int32", [], TensorProto.INT32),
+        ],
+    )
+    yield helper.make_graph(
+        [
+            helper.make_node("Expand", ["scalar", "shape"], ["expanded"]),
+            helper.make_node("Add", ["expanded", "matrix"], ["sum"]),
+            helper.make_node("ReduceSum", ["sum"], ["total"], keepdims=0),
+            helper.make_node("Reshape", ["index", "vector_shape"], ["index_vector"]),
+            helper.make_node("Not", ["flag"], ["inverted"]),
+        ],
+        "scalar_entry_compute",
+        [
+            value("scalar", []),
+            value("matrix", [1, 2, 3]),
+            value("index", [], TensorProto.INT64),
+            value("flag", [], TensorProto.BOOL),
+        ],
+        [
+            value("total", []),
+            value("sum", [1, 2, 3]),
+            value("index_vector", [1], TensorProto.INT64),
+            value("inverted", [], TensorProto.BOOL),
+        ],
+        [
+            numpy_helper.from_array(np.array([1, 2, 3], np.int64), "shape"),
+            numpy_helper.from_array(np.array([1], np.int64), "vector_shape"),
+        ],
+    )
+    yield helper.make_graph(
+        [],
         "constant_no_inputs",
         [],
         [value("constant", [1, 2, 3, 4])],
@@ -178,8 +220,11 @@ def compare(source, target, use_buffer_offset, layout_mode="auto", delegates=Tru
             else:
                 data = rng.normal(size=metadata.shape).astype(np.float32)
             feeds[metadata.name] = data
-            physical = np.ascontiguousarray(
-                onnx_to_tfl_input(data, tuple(detail["shape"]), layout_mode)
+            # ascontiguousarray promotes a scalar to shape [1], changing its ABI.
+            physical = np.array(
+                onnx_to_tfl_input(data, tuple(detail["shape"]), layout_mode),
+                copy=True,
+                order="C",
             )
             physical_feeds[metadata.name] = physical
             interpreter.set_tensor(detail["index"], physical)

@@ -2,9 +2,12 @@
 
 # Known limitations
 
-- Only static ranked tensors are accepted. Dynamic dimensions and unranked
-  tensors fail conversion.
-- Runtime activations must be FP32. Shape constants may be i32 or i64.
+- Only static ranked tensors are accepted. Scalar (rank-0) graph inputs and
+  outputs preserve their empty shape for supported FP32, bool, i32 and i64
+  types. Dynamic dimensions and unranked tensors fail conversion; individual
+  operators retain their own rank and type restrictions.
+- Neural-network activations are primarily FP32. Selected operators also accept
+  bool, i32, or i64 runtime tensors; see the operator support table.
 - Quantization, calibration, sparse tensors, custom ops, and Select TF/Flex ops
   are unsupported.
 - Ordinary FlatBuffer metadata has a 2 GB size ceiling. For a large ONNX model,
@@ -46,7 +49,8 @@
   compared, and reshaped back. This may materialize a larger temporary tensor.
   Remaining comparison operators and non-FP32 comparisons are not implemented.
 - Sign supports static FP32 tensors through rank 5. Mod supports numpy-style
-  broadcasting through rank 5 for static FP32 `fmod=1` and int64 `fmod=0/1`.
+  broadcasting, including scalars, through rank 5 for static FP32 `fmod=1` and
+  int64 `fmod=0/1`.
   Other element types and dynamic shapes are not implemented. Rank-5 Mod
   materializes broadcasts and flattens around the TFL FloorMod/sign-correction
   sequence, which may increase temporary memory. Other integer widths and Cast
@@ -66,10 +70,24 @@
   static rank-6/rank-7 Reshape/Transpose/Softmax/Gather/Mul/ReduceSum topology,
   axes, shapes, and constant gather indices exactly match. It is rewritten to
   rank-at-most-4 Softmax/Gather/BatchMatMul/DepthToSpace operations. This is
-  not general support for arbitrary rank-6/rank-7 graphs. Static i64 Add/Mul,
+  not general support for arbitrary rank-6/rank-7 graphs. Static i64 Add/Sub/Mul,
   Less/Greater comparisons, and Unsqueeze are supported for generated sampling
   coordinate/index chains; other general integer elementwise combinations are
   not claimed.
+- Clip accepts matching static FP32/i32/i64 inputs and results of ranks 0-5;
+  optional min/max bounds must be scalar and have the input element type.
+  Integer bounds and values are retained without floating-point conversion.
+- Int64 Div accepts nonempty static broadcast results of ranks 0-5. The
+  fast path narrows only proven i32-range dividends with positive constant
+  i32-range divisors. Proven nonnegative bounded dividends and positive runtime
+  divisors also use exact integer division after safely capping the divisor
+  above the maximum dividend; input ranges are never assumed. General inputs use conservative FP32 quotient estimates
+  with exact i64 residual updates and correction, not plain floating-point
+  division or unchecked narrowing. Valid inputs require nonzero divisors and
+  a representable quotient (`INT64_MIN / -1` is excluded). Constant zero
+  divisors are rejected; runtime domain constraints are the caller's
+  responsibility. Rank-5 broadcasts are materialized and flattened for
+  comparison kernels.
 - Einsum has no direct TFL lowering. The pinned onnx-mlir importer must
   decompose a static FP32 equation into supported MatMul, Transpose, ReduceSum,
   Where, Mul, Reshape, and Unsqueeze operations. The 22 equations in the
@@ -97,8 +115,10 @@
 - Conv is limited to static FP32 shapes. Conv1D is represented as Conv2D with
   one singleton spatial dimension. Positive Conv2D dilation is preserved in
   the native TFLite Conv2D attributes; `SAME_LOWER` remains unsupported.
-  Non-depthwise grouped Conv1D/2D is decomposed into per-group Conv2D plus
-  channel concatenation; true depthwise forms use `tfl.depthwise_conv_2d`.
+  Non-depthwise grouped Conv1D/2D uses native `tfl.conv_2d`, with groups
+  inferred from input channels divided by filter input channels. Downstream
+  backends must support this standard builtin configuration; true depthwise
+  forms use `tfl.depthwise_conv_2d`.
   Conv3D first attempts an exact Conv2D reduction when a spatial kernel
   dimension is 1, that axis has stride 1, and its explicit begin/end padding
   is zero. A group-1 Conv3D is also reduced when the depth kernel covers the
@@ -180,14 +200,24 @@
 - Gather supports static FP32 data/results through rank 6 and static i32/i64 constant or
   runtime indices. Runtime negative indices are normalized before TFLite
   Gather; other out-of-range runtime values remain an execution-time error.
-- GatherElements requires static FP32 data/result and i32/i64 indices at ranks
-  1-5. Constant indices become full GatherNd coordinates at compile time.
-  Runtime indices are narrowed to i32, negative values are normalized, and
+  Scalar constant zero on a singleton axis can become a physical reshape;
+  this does not remove runtime-index bounds checks.
+- GatherElements requires matching static FP32/i32/i64 data/result and i32/i64 indices at ranks
+  1-5. Proven rank-2 constant fixed or repeating descending row windows become
+  Slice/Reshape without an index table. Other constant indices become full
+  GatherNd coordinates at compile time, with bounded linearization to Gather
+  where applicable.
+  Explicit index broadcasts selecting complete trailing slices can instead
+  become a compact row Gather, retaining i32/i64 index width. Shared indices
+  or fully specified batch prefixes are supported; partially broadcast batch
+  prefixes and partial trailing slices retain the general path.
+  In the general path, runtime indices are narrowed to i32, negative values are normalized, and
   static non-selected-axis coordinate components are concatenated with the
   runtime selected-axis component before GatherNd. Large index tensors can
   therefore increase FlatBuffer constant size; invalid runtime bounds remain
   an execution-time error. Rank-3/4/5 feature and weight cases, including
-  runtime-index paths, are covered.
+  runtime-index paths, are covered. Integer data remain in logical dimension
+  order and do not use FP32 NCHW/NHWC layout conversions.
 - ScatterElements is currently restricted to an identity-index form: static
   equal-shape FP32 tensors, constant indices that select every
   update's own coordinate, and `reduction=none`. It lowers exactly to the

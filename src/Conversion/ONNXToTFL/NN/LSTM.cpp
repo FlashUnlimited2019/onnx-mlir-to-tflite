@@ -80,6 +80,12 @@ Value createBatchMatMul(Location loc, Value lhs, Value rhs, Type resultType,
 SmallVector<Value> createSplitV(Location loc, Value input, int64_t axis,
     ArrayRef<int64_t> splitSizes, ArrayRef<Type> resultTypes,
     ConversionPatternRewriter &rewriter) {
+  auto inputType = dyn_cast<RankedTensorType>(input.getType());
+  if (inputType && inputType.hasStaticShape() && axis >= 0 &&
+      axis < inputType.getRank() && splitSizes.size() == 1 &&
+      resultTypes.size() == 1 && resultTypes.front() == inputType &&
+      splitSizes.front() == inputType.getDimSize(axis))
+    return {input};
   Value sizes = createI32ShapeConstant(rewriter, loc, splitSizes);
   Value axisValue =
       createI32ScalarTensorConstant(rewriter, loc, static_cast<int32_t>(axis));

@@ -97,7 +97,27 @@ irregular gather coordinates retain their ordering. Every coordinate is
 checked independently before linearization; dynamic indices, oversized
 inspection work, and unsupported shapes retain the existing lowering.
 
-These rules only consume constants available at their respective stages.
+Rank-two FP32/i32/i64 `GatherElements` can also eliminate a constant index table when
+every row selects a contiguous window. Fixed windows become a Slice. Repeating
+windows whose starting offset decreases by a constant step become two Reshapes
+and two Slices: the flattened row stride is reduced by that step. The rewrite
+checks every normalized index, complete row-block coverage, bounds, and i32
+shape limits, and limits the copied intermediate to twice the output size.
+It does not change floating-point arithmetic or add runtime index
+generation. Irregular, runtime, higher-rank, and partially covered cases retain
+the existing gather paths. This can trade a few inexpensive layout operations
+for much smaller constants; runtime performance still requires measurement.
+
+For runtime `GatherElements`, an explicit index broadcast that repeats the
+same index across each complete trailing slice becomes a row `Gather`.
+Indices shared across all batch prefixes use `batch_dims=0`; fully specified
+per-prefix indices use a rank-three view and `batch_dims=1`. Normalization of
+negative indices happens on the compact indices, retaining their integer
+width. Partial slices, partially broadcast batch prefixes, and channel-varying
+indices retain the general lowering. Shared index broadcasts remain available
+to other consumers.
+
+Constant-index rules only consume constants available at their respective stages.
 Coordinates that become constant later in TensorFlow/LiteRT optimization are
 not automatically revisited by the ONNX-MLIR-side rewrites.
 
@@ -132,6 +152,17 @@ view operations:
 Both forms require a static rank-3 FP32 input, exactly three compatible
 branches, consistent head width and batch/sequence dimensions, and the
 expected single-use projection chains.
+
+### Shared projections across a batch partition
+
+Scalar gathers that cover a static batch axis exactly once can share one
+constant-weight MatMul and bias addition before the gathers. Identical,
+single-use LeakyReLU branches can share their activation as well. This avoids
+repeated projection invocations without evaluating additional rows. The rule
+requires static FP32 rank-3/4 tensors, a batch axis preceding the matrix axes,
+identical weights and bias, and an exhaustive, unique partition of at most 64
+indices. Incomplete selections, duplicate indices, different parameters, or
+shared intermediate results retain their existing computation.
 
 ### Split bias placement
 
@@ -291,9 +322,12 @@ and permutations match exactly. Constant filter layout changes are folded
 into the stored weights by the optional TFL optimizer.
 
 Depthwise and grouped Conv1D or removable-axis Conv3D forms use the
-corresponding Conv2D lowering. Grouped forms are decomposed into split,
-convolve, and concatenate operations when required. Non-reducible grouped
-Conv3D uses the same decomposition around native Conv3D operations. Failed
+corresponding Conv2D lowering. Non-depthwise grouped Conv2D is emitted as one
+standard builtin operation: its group count is inferred from input and filter
+channel dimensions. This avoids per-group splits, kernel invocations, and
+concatenation, and requires grouped-Conv2D support in the downstream backend.
+Non-reducible grouped Conv3D still uses split/convolve/concatenate around
+native Conv3D operations. Failed
 shape, grouping, padding, or output-extent checks simply disable rank
 reduction.
 
@@ -341,6 +375,9 @@ physical layout. This allows backends supporting equal splits to retain larger
 accelerated subgraphs without requiring variable-split support; performance
 still depends on the runtime and target hardware.
 
+Single-part LSTM input or state splits are bypassed when their sole output
+has exactly the input type and covers the entire split axis.
+
 ## TFL structural rewrites
 
 After full ONNX legalization, targeted rewrites simplify structures that are
@@ -359,9 +396,39 @@ clearer in TFL form:
 | Pointwise layout motion | Move a transpose through FP32 pointwise arithmetic or activation and cancel matching input transposes | Static ranks at most four, right-aligned broadcasting remapped by axis identity, preserved operand order and activation attributes, no duplicated computation, fewer layout copies, and no increase in view count |
 | Pointwise singleton views | Move a singleton-only reshape through pointwise computation and bypass matching operand reshapes | Broadcast axes and inferred output rank remain valid, no real dimensions are split or merged, ranks at most four, and a strict reduction in view count |
 | Padding layout round trip | `Transpose -> Pad/PadV2 -> inverse Transpose` becomes reordered padding | Static FP32 ranks at most four, nonnegative constant paddings, exact output shape, preserved scalar fill value, and a single-use padding result |
+| Masked layout motion | Move a transpose through `SelectV2`, bypass compatible index-free broadcasts, and cancel operand transposes | Static ranks at most four; every operand becomes a view without reordering non-unit axes; exact broadcast/output shape; a single-use selection result; shared operand producers remain intact |
+| Singleton-axis selection | Scalar-index `Gather` becomes a reshape | Constant index zero, selected extent one, `batch_dims=0`, and exact physical output shape/type; unchecked runtime indices and vector indices do not match |
 
 The broadcast-folding proof checks the exact linear index mapping for bounded
 static tensors. Optional scalar scaling is retained on the unbroadcast source.
+
+Masked selection stays a selection, not multiplication by a numeric mask, so
+the rewrite preserves NaNs, infinities, and signed zeros without changing
+arithmetic. A mask requiring a new physical transpose does not match.
+
+### Bounded integer division
+
+A bounded analysis of constants, integer widening casts, views, and Min/Max
+can prove `0 <= a <= A < INT32_MAX` and `b >= 1`. In that case, int64 division
+uses the exact identity `a / b = a / min(b, A + 1)`: operands fit int32,
+integer division computes the quotient, and an int64 cast restores the result
+type. No range is assumed for graph inputs. Unproven bounds, negative
+dividends, or an unrepresentable cap retain the existing general int64
+division path; division-by-zero and quotient-overflow domain restrictions
+remain unchanged.
+
+### Convolution channel-to-spatial shuffle
+
+A static channel-to-width shuffle after an ungrouped FP32 Conv2D can move its
+channel permutation into constant OHWI weights and bias. The matched sequence
+`[N,1,L,C*S] -> [N,C*S,1,L] -> [N,C,S,L] -> [N,C,L,S] -> [N,C,1,L*S]`
+then needs only a reshape and the required output-layout transpose; an
+immediately following inverse transpose is canceled. Exact shapes and
+permutations are checked, all replaced intermediate values must have one use,
+and constant-filter copying is bounded. Runtime filters, grouped/depthwise
+convolutions, shared intermediate results, and different shuffle orders are
+left unchanged. The transformation preserves the convolution's attributes and
+does not introduce higher-rank activations or custom operations.
 
 ### Static indices, slices, and masks
 
@@ -413,7 +480,7 @@ configuration is unsupported.
 
 Post-lowering matrix and transformer rewriting uses existing and newly created
 `BatchMatMul` and `Transpose` roots. Subsequent local layout cleanup targets
-`Transpose`, `Slice`, `Reshape`, and `Concat` roots. Static index rewriting uses
+`Transpose`, `Slice`, `Reshape`, `Gather`, and `Concat` roots. Static index rewriting uses
 its own operation whitelist and evaluation budgets. Generic folding, constant
 CSE, and region simplification are disabled in these local phases so they do
 not become unbounded whole-module optimizers.
@@ -438,6 +505,12 @@ unit-axis views, shared branches, repeated operands, fused activations, and
 padding against NumPy in both layouts, with and without downstream optimization
 and runtime delegation. Arithmetic checks use explicit tolerances; copy-only
 fixtures also exercise exceptional floating-point values.
+`test/e2e/run_index_layout_cleanup.py` covers compact broadcast row gathers,
+masked layout motion, singleton gathers, and proven integer-division bounds
+in both layouts, with TFL optimization and runtime delegation on/off. It
+checks partial-coverage fallbacks, shared uses, invalid indices, full-width
+integer boundaries, and bitwise preservation of copied floating-point data.
+Integer boundary cases use an exact integer oracle alongside ONNX Runtime.
 `test/e2e/run_static_padded_nms.py` checks padded suppression against ONNX Runtime
 across box formats, batches, classes, selection limits, threshold boundaries,
 ties, empty selections, degenerate boxes, both workspace paths, and rejected

@@ -89,9 +89,10 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 // CHECK-LABEL: func.func @main
-// CHECK-COUNT-3: "tfl.split_v"
-// CHECK-COUNT-2: "tfl.conv_2d"
-// CHECK: "tfl.concatenation"
+// CHECK-NOT: "tfl.split_v"
+// CHECK: "tfl.conv_2d"
+// CHECK-NOT: "tfl.conv_2d"
+// CHECK-NOT: "tfl.concatenation"
 // CHECK-NOT: onnx.Conv
 
 // -----
@@ -104,9 +105,10 @@ module {
   "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 }
 // CHECK-LABEL: func.func @main
-// CHECK-COUNT-3: "tfl.split_v"
-// CHECK-COUNT-2: "tfl.conv_2d"
-// CHECK: "tfl.concatenation"
+// CHECK-NOT: "tfl.split_v"
+// CHECK: "tfl.conv_2d"
+// CHECK-NOT: "tfl.conv_2d"
+// CHECK-NOT: "tfl.concatenation"
 // CHECK-NOT: onnx.Conv
 
 // -----

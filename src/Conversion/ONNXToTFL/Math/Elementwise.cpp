@@ -86,6 +86,201 @@ FailureOr<Value> adaptRank4ElementwiseBroadcast(Operation *sourceOp,
       ->getResult(0);
 }
 
+struct I64Range {
+  int64_t lower = std::numeric_limits<int64_t>::min();
+  int64_t upper = std::numeric_limits<int64_t>::max();
+};
+
+// A deliberately small range analysis: never assume bounds for graph inputs,
+// infer through overflowing arithmetic, or reinterpret floating-point casts.
+// Limit recursion and constant inspection independently of graph size.
+I64Range knownI64Range(Value value, unsigned depth = 0) {
+  auto type = dyn_cast<RankedTensorType>(value.getType());
+  if (!type || !type.hasStaticShape() ||
+      !type.getElementType().isSignlessInteger(64) || depth >= 8)
+    return {};
+  if (type.getNumElements() > 0 && type.getNumElements() <= 65536) {
+    auto values = getConstantIntValues(value);
+    if (succeeded(values) && !values->empty()) {
+      auto bounds = std::minmax_element(values->begin(), values->end());
+      return {*bounds.first, *bounds.second};
+    }
+  }
+  Operation *producer = value.getDefiningOp();
+  if (!producer || producer->getNumResults() != 1)
+    return {};
+  StringRef name = producer->getName().getStringRef();
+  if (name == "tfl.cast" && producer->getNumOperands() == 1) {
+    auto input = dyn_cast<RankedTensorType>(producer->getOperand(0).getType());
+    if (input && input.getElementType().isSignlessInteger(32))
+      return {std::numeric_limits<int32_t>::min(),
+          std::numeric_limits<int32_t>::max()};
+  }
+  if ((name == "tfl.reshape" || name == "tfl.transpose" ||
+          name == "tfl.broadcast_to") &&
+      producer->getNumOperands() == 2)
+    return knownI64Range(producer->getOperand(0), depth + 1);
+  if ((name == "tfl.maximum" || name == "tfl.minimum") &&
+      producer->getNumOperands() == 2) {
+    auto a = knownI64Range(producer->getOperand(0), depth + 1);
+    auto b = knownI64Range(producer->getOperand(1), depth + 1);
+    if (name == "tfl.maximum")
+      return {std::max(a.lower, b.lower), std::max(a.upper, b.upper)};
+    return {std::min(a.lower, b.lower), std::min(a.upper, b.upper)};
+  }
+  return {};
+}
+
+FailureOr<Value> lowerGeneralI64Div(Operation *op, Value lhs, Value rhs,
+    RankedTensorType resultType, ConversionPatternRewriter &rewriter) {
+  auto lhsType = cast<RankedTensorType>(lhs.getType());
+  auto rhsType = cast<RankedTensorType>(rhs.getType());
+  int64_t rank = std::max(lhsType.getRank(), rhsType.getRank());
+  if (rank > 5 || rank != resultType.getRank() ||
+      llvm::any_of(resultType.getShape(), [](int64_t d) { return d <= 0; }))
+    return op->emitError("i64 Div requires nonempty static broadcast results "
+                         "of rank at most 5"),
+           failure();
+  for (int64_t offset = 0; offset < rank; ++offset) {
+    int64_t a = offset < lhsType.getRank()
+                    ? lhsType.getDimSize(lhsType.getRank() - 1 - offset)
+                    : 1;
+    int64_t b = offset < rhsType.getRank()
+                    ? rhsType.getDimSize(rhsType.getRank() - 1 - offset)
+                    : 1;
+    if ((a != b && a != 1 && b != 1) ||
+        resultType.getDimSize(rank - 1 - offset) != std::max(a, b))
+      return op->emitError("i64 Div result does not match broadcasting"),
+             failure();
+  }
+  auto divisors = getConstantIntValues(rhs);
+  if (succeeded(divisors) && llvm::is_contained(*divisors, int64_t{0}))
+    return op->emitError("i64 Div requires nonzero divisors"), failure();
+
+  Location loc = op->getLoc();
+  auto emit = [&](StringRef name, Type type, ValueRange operands) -> Value {
+    SmallVector<NamedAttribute> attrs;
+    if (name == "tfl.add" || name == "tfl.sub" || name == "tfl.mul" ||
+        name == "tfl.div")
+      attrs.push_back(getFusedActivationNone(rewriter));
+    return createTFLOperation(
+        rewriter, loc, name, TypeRange{type}, operands, attrs)
+        ->getResult(0);
+  };
+  I64Range dividendRange = knownI64Range(lhs);
+  I64Range divisorRange = knownI64Range(rhs);
+  if (dividendRange.lower >= 0 &&
+      dividendRange.upper < std::numeric_limits<int32_t>::max() &&
+      divisorRange.lower >= 1) {
+    // For 0<=a<=A and b>=1, a/b == a/min(b,A+1). Clamping the divisor
+    // preserves the zero quotient above A and makes both i32 casts exact.
+    // Neither a user-provided length hint nor unchecked i64 narrowing is used.
+    int64_t cap = dividendRange.upper + 1;
+    if (divisorRange.upper > cap) {
+      auto scalarType = RankedTensorType::get({}, rewriter.getI64Type());
+      Value limit = arith::ConstantOp::create(rewriter, loc, scalarType,
+          DenseIntElementsAttr::get(scalarType, ArrayRef<int64_t>{cap}));
+      rhs = emit("tfl.minimum", rhsType, {rhs, limit});
+    }
+    auto narrow = [&](Value value) {
+      auto type = cast<RankedTensorType>(value.getType());
+      return emit("tfl.cast",
+          RankedTensorType::get(type.getShape(), rewriter.getI32Type()),
+          {value});
+    };
+    Value quotient = emit("tfl.div",
+        RankedTensorType::get(resultType.getShape(), rewriter.getI32Type()),
+        {narrow(lhs), narrow(rhs)});
+    return emit("tfl.cast", resultType, {quotient});
+  }
+  RankedTensorType calculationType = resultType;
+  // Comparison kernels broadcast at most four dimensions. Materialize the
+  // rank-five broadcast once, then do the elementwise calculation in rank one.
+  if (rank == 5) {
+    if (resultType.getNumElements() > std::numeric_limits<int32_t>::max())
+      return op->emitError("i64 Div flattened shape exceeds the i32 range"),
+             failure();
+    calculationType = RankedTensorType::get(
+        {resultType.getNumElements()}, rewriter.getI64Type());
+    auto flatten = [&](Value value) {
+      if (value.getType() != resultType)
+        value = emit("tfl.broadcast_to", resultType,
+            {value,
+                createI32ShapeConstant(rewriter, loc, resultType.getShape())});
+      return emit("tfl.reshape", calculationType,
+          {value, createI32ShapeConstant(
+                      rewriter, loc, calculationType.getShape())});
+    };
+    lhs = flatten(lhs);
+    rhs = flatten(rhs);
+    lhsType = rhsType = calculationType;
+  }
+  auto scalarType = RankedTensorType::get({}, rewriter.getI64Type());
+  auto scalar = [&](int64_t value) -> Value {
+    return arith::ConstantOp::create(rewriter, loc, scalarType,
+        DenseIntElementsAttr::get(scalarType, ArrayRef<int64_t>{value}));
+  };
+  Value zero = scalar(0), one = scalar(1);
+  auto negativeMagnitude = [&](Value value) {
+    Type type = value.getType();
+    Value positive = emit("tfl.maximum", type, {value, zero});
+    Value negative = emit("tfl.sub", type, {zero, positive});
+    return emit("tfl.minimum", type, {value, negative});
+  };
+  Value remainder = negativeMagnitude(lhs);
+  Value divisor = negativeMagnitude(rhs);
+  auto floatType =
+      RankedTensorType::get(calculationType.getShape(), rewriter.getF32Type());
+  auto boolType =
+      RankedTensorType::get(calculationType.getShape(), rewriter.getI1Type());
+  Value divisorFloat = emit("tfl.cast",
+      RankedTensorType::get(rhsType.getShape(), rewriter.getF32Type()),
+      {divisor});
+  Value scale = createF32ScalarTensorConstant(rewriter, loc, 1.0f - 0x1p-12f);
+  Value quotient = zero;
+  // Do not use a plain float quotient or narrow arbitrary i64 inputs. For
+  // nonzero divisors, round-to-nearest FP32 estimates scaled by (1-2^-12)
+  // underestimate the remaining magnitude quotient. Their relative deficit
+  // is less than 2^-11, including casts/division/multiplication rounding.
+  // Each integer residual update therefore reduces q to < q*2^-11+1.
+  // Starting at q<=2^63, six updates leave q<2; one integer comparison gives
+  // the exact final unit. Negative magnitudes preserve INT64_MIN without abs
+  // overflow. As for integer division generally, INT64_MIN/-1 is excluded.
+  for (int i = 0; i < 6; ++i) {
+    auto remainderType = cast<RankedTensorType>(remainder.getType());
+    Value asFloat = emit("tfl.cast",
+        RankedTensorType::get(remainderType.getShape(), rewriter.getF32Type()),
+        {remainder});
+    Value estimate = emit("tfl.div", floatType, {asFloat, divisorFloat});
+    estimate = emit("tfl.mul", floatType, {estimate, scale});
+    Value part = emit("tfl.cast", calculationType, {estimate});
+    Value product = emit("tfl.mul", calculationType, {part, divisor});
+    remainder = emit("tfl.sub", calculationType, {remainder, product});
+    quotient = emit("tfl.sub", calculationType, {quotient, part});
+  }
+  Value extra = emit("tfl.less_equal", boolType, {remainder, divisor});
+  Value delta = emit("tfl.select_v2", calculationType, {extra, one, zero});
+  quotient = emit("tfl.sub", calculationType, {quotient, delta});
+  Value lhsNegative = emit("tfl.less",
+      RankedTensorType::get(lhsType.getShape(), rewriter.getI1Type()),
+      {lhs, zero});
+  Value rhsNegative = emit("tfl.less",
+      RankedTensorType::get(rhsType.getShape(), rewriter.getI1Type()),
+      {rhs, zero});
+  Value negative = emit("tfl.not_equal", boolType, {lhsNegative, rhsNegative});
+  // Select before negating so the valid negative INT64_MIN quotient is never
+  // negated even speculatively in an unselected branch.
+  Value toNegate =
+      emit("tfl.select_v2", calculationType, {negative, zero, quotient});
+  Value positive = emit("tfl.sub", calculationType, {zero, toNegate});
+  Value result =
+      emit("tfl.select_v2", calculationType, {negative, quotient, positive});
+  if (rank == 5)
+    result = emit("tfl.reshape", resultType,
+        {result, createI32ShapeConstant(rewriter, loc, resultType.getShape())});
+  return result;
+}
+
 template <typename ONNXOp>
 class BinaryElementwiseLowering final : public OpConversionPattern<ONNXOp> {
 public:
@@ -103,8 +298,8 @@ public:
     auto sourceResultType =
         dyn_cast<RankedTensorType>(op->getResult(0).getType());
     bool supportsI32 = tflName == "tfl.add";
-    bool supportsI64 =
-        tflName == "tfl.add" || tflName == "tfl.mul" || tflName == "tfl.div";
+    bool supportsI64 = tflName == "tfl.add" || tflName == "tfl.sub" ||
+                       tflName == "tfl.mul" || tflName == "tfl.div";
     bool isF32 = lhsType && lhsType.getElementType().isF32();
     bool isI32 = lhsType && lhsType.getElementType().isSignlessInteger(32);
     bool isI64 = lhsType && lhsType.getElementType().isSignlessInteger(64);
@@ -116,7 +311,7 @@ public:
         (!isF32 && !(isI32 && supportsI32) && !(isI64 && supportsI64))) {
       op.emitError() << "ONNXToTFL " << op->getName()
                      << " requires matching static FP32 operands/results, "
-                        "i32 for Add, or i64 for Add/Mul/bounded Div";
+                        "i32 for Add, or i64 for Add/Sub/Mul/Div";
       return failure();
     }
 
@@ -145,11 +340,16 @@ public:
       if (sourceResultType.getRank() > 5 || !fitsI32(lhs) || failed(divisors) ||
           divisors->empty() || !llvm::all_of(*divisors, [](int64_t v) {
             return v > 0 && v <= std::numeric_limits<int32_t>::max();
-          }))
-        return op.emitError("i64 Div requires an i32-representable dividend, "
-                            "positive constant i32-range divisors, and "
-                            "result rank <= 5"),
-               failure();
+          })) {
+        auto result = lowerGeneralI64Div(op, lhs, rhs,
+            cast<RankedTensorType>(
+                this->getTypeConverter()->convertType(sourceResultType)),
+            rewriter);
+        if (failed(result))
+          return failure();
+        rewriter.replaceOp(op, *result);
+        return success();
+      }
       auto narrow = [&](Value value, RankedTensorType type) {
         return createTFLOperation(rewriter, op.getLoc(), "tfl.cast",
             TypeRange{
@@ -526,11 +726,10 @@ public:
     if ((!isF32 && !isI64) || sourceLhsType.getElementType() != elementType ||
         sourceRhsType.getElementType() != elementType ||
         sourceLhsType.getRank() > 5 || sourceRhsType.getRank() > 5 ||
-        sourceResultType.getRank() < 1 || sourceResultType.getRank() > 5 ||
-        (isF32 && op.getFmod() != 1) ||
+        sourceResultType.getRank() > 5 || (isF32 && op.getFmod() != 1) ||
         (isI64 && op.getFmod() != 0 && op.getFmod() != 1)) {
       op.emitError("ONNXToTFL Mod supports static FP32 fmod=1 and i64 "
-                   "fmod=0/1 operands/results of ranks 1 through 5");
+                   "fmod=0/1 operands/results of ranks 0 through 5");
       return failure();
     }
 
@@ -676,22 +875,31 @@ public:
       ConversionPatternRewriter &rewriter) const override {
     Value input = adaptor.getInput();
     auto resultType = dyn_cast<RankedTensorType>(op.getType());
-    if (!resultType ||
-        failed(validateStaticF32Tensor(op, input.getType(), "Clip input")) ||
-        failed(validateStaticF32Tensor(op, resultType, "Clip result")))
-      return failure();
+    auto sourceType = dyn_cast<RankedTensorType>(op.getInput().getType());
+    if (!sourceType || !resultType || !sourceType.hasStaticShape() ||
+        !resultType.hasStaticShape() ||
+        sourceType.getShape() != resultType.getShape() ||
+        sourceType.getElementType() != resultType.getElementType() ||
+        resultType.getRank() > 5 ||
+        (!resultType.getElementType().isF32() &&
+            !resultType.getElementType().isSignlessInteger(32) &&
+            !resultType.getElementType().isSignlessInteger(64)))
+      return op.emitError("ONNXToTFL Clip requires matching static FP32, i32, "
+                          "or i64 input/result shapes of rank at most 5"),
+             failure();
 
     auto validateBound = [&](Value source, Value converted,
                              StringRef role) -> LogicalResult {
       if (isa<NoneType>(source.getType()))
         return success();
       auto type = dyn_cast<RankedTensorType>(source.getType());
-      if (!type || type.getRank() != 0 ||
-          failed(
-              validateStaticF32TensorOrScalar(op, converted.getType(), role)))
-        return op.emitError()
-                   << "ONNXToTFL Clip requires an omitted or scalar FP32 "
-                   << role,
+      auto convertedType = dyn_cast<RankedTensorType>(converted.getType());
+      if (!type || type.getRank() != 0 || !convertedType ||
+          convertedType.getRank() != 0 ||
+          type.getElementType() != resultType.getElementType() ||
+          convertedType.getElementType() != resultType.getElementType())
+        return op.emitError() << "ONNXToTFL Clip requires an omitted or scalar "
+                              << role << " with the input element type",
                failure();
       return success();
     };
@@ -699,7 +907,10 @@ public:
         failed(validateBound(op.getMax(), adaptor.getMax(), "maximum")))
       return failure();
 
-    Type physicalResultType = convertRank4NCHWToNHWCType(resultType);
+    Type physicalResultType = getTypeConverter()->convertType(resultType);
+    if (input.getType() != physicalResultType)
+      return op.emitError("Clip input/result physical layouts must match"),
+             failure();
     Value result = input;
     if (!isa<NoneType>(op.getMin().getType()))
       result = createTFLOperation(rewriter, op.getLoc(), "tfl.maximum",

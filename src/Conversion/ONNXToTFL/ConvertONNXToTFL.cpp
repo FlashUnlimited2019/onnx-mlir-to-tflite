@@ -110,10 +110,8 @@ LogicalResult validateEntryTensor(Operation *op, Type type, StringRef role) {
               "("
            << role << ": " << type << ")";
   }
-  if (tensorType.getRank() < 1) {
-    return op->emitError() << "ONNXToTFL MVP requires activation rank >= 1 ("
-                           << role << ")";
-  }
+  // Ranked scalar tensors are static entry values too. Preserve their empty
+  // shape at the public interface; individual lowerings validate operand ranks.
   Type elementType = tensorType.getElementType();
   if (!elementType.isF32() && !elementType.isInteger(1) &&
       !elementType.isSignlessInteger(32) &&

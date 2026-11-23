@@ -44,6 +44,138 @@ Operation *getSingleUser(Value value) {
   return value.hasOneUse() ? *value.getUsers().begin() : nullptr;
 }
 
+// Evaluate a shared projection once for a complete partition of a batch axis.
+// Requiring every index exactly once avoids computing unrequested rows or
+// turning a sparse selection into a larger matrix multiplication.
+class HoistGatherProjectionPattern final
+    : public OpRewritePattern<ONNXMatMulOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXMatMulOp op, PatternRewriter &rewriter) const override {
+    auto first = op.getA().getDefiningOp<ONNXGatherOp>();
+    if (!first)
+      return failure();
+    auto source = dyn_cast<RankedTensorType>(first.getData().getType());
+    auto weight = dyn_cast<RankedTensorType>(op.getB().getType());
+    if (!source || !source.hasStaticShape() || source.getRank() < 3 ||
+        source.getRank() > 4 || source.getEncoding() ||
+        !source.getElementType().isF32() || !weight || weight.getEncoding() ||
+        !weight.hasStaticShape() || weight.getRank() != 2 ||
+        !weight.getElementType().isF32() || weight.getDimSize(1) <= 0 ||
+        source.getShape().back() != weight.getDimSize(0) ||
+        failed(getDenseF32Constant(op.getB())))
+      return failure();
+    int64_t axis = normalizeAxis(first.getAxis(), source.getRank());
+    if (axis < 0 || axis >= source.getRank() - 2 ||
+        source.getDimSize(axis) < 2 || source.getDimSize(axis) > 64 ||
+        llvm::any_of(source.getShape(), [](int64_t d) { return d <= 0; }))
+      return failure();
+    struct Branch {
+      ONNXGatherOp gather;
+      ONNXMatMulOp matmul;
+      ONNXAddOp add;
+    };
+    SmallVector<Branch> branches;
+    SmallVector<bool> seen(source.getDimSize(axis), false);
+    Value commonBias;
+    for (Operation *user : first.getData().getUsers()) {
+      auto gather = dyn_cast<ONNXGatherOp>(user);
+      if (!gather || gather.getData() != first.getData() ||
+          normalizeAxis(gather.getAxis(), source.getRank()) != axis)
+        continue;
+      auto indicesType =
+          dyn_cast<RankedTensorType>(gather.getIndices().getType());
+      auto indices = getConstantIntValues(gather.getIndices());
+      auto matmul =
+          dyn_cast_or_null<ONNXMatMulOp>(getSingleUser(gather.getResult()));
+      if (!indicesType || indicesType.getRank() != 0 || failed(indices) ||
+          indices->size() != 1 || !matmul ||
+          matmul.getA() != gather.getResult() || matmul.getB() != op.getB() ||
+          matmul->getBlock() != op->getBlock())
+        return failure();
+      int64_t index = indices->front();
+      if (index < 0)
+        index += source.getDimSize(axis);
+      if (index < 0 || index >= source.getDimSize(axis) || seen[index])
+        return failure();
+      seen[index] = true;
+      auto add = dyn_cast_or_null<ONNXAddOp>(getSingleUser(matmul.getResult()));
+      if (!add)
+        return failure();
+      Value bias = add.getA() == matmul.getResult() ? add.getB() : add.getA();
+      auto biasType = dyn_cast<RankedTensorType>(bias.getType());
+      if (!biasType || biasType.getRank() != 1 ||
+          biasType.getDimSize(0) != weight.getDimSize(1) ||
+          !biasType.getElementType().isF32() ||
+          failed(getDenseF32Constant(bias)) ||
+          (commonBias && commonBias != bias))
+        return failure();
+      commonBias = bias;
+      SmallVector<int64_t> shape(source.getShape());
+      shape.erase(shape.begin() + axis);
+      if (gather.getType() !=
+          RankedTensorType::get(shape, rewriter.getF32Type()))
+        return failure();
+      shape.back() = weight.getDimSize(1);
+      auto resultType = RankedTensorType::get(shape, rewriter.getF32Type());
+      if (matmul.getType() != resultType || add.getType() != resultType)
+        return failure();
+      branches.push_back({gather, matmul, add});
+    }
+    if (branches.size() != seen.size() ||
+        !llvm::all_of(seen, [](bool value) { return value; }))
+      return failure();
+    llvm::sort(branches, [](const Branch &a, const Branch &b) {
+      return a.matmul->isBeforeInBlock(b.matmul);
+    });
+    if (branches.front().matmul != op)
+      return failure();
+    Operation *biasOp = commonBias.getDefiningOp();
+    if (!biasOp || biasOp->getBlock() != op->getBlock() ||
+        !biasOp->isBeforeInBlock(op))
+      return failure();
+    // Identical pointwise activations commute with the complete partition.
+    // Keep them branch-local if any branch has additional uses or differs.
+    SmallVector<ONNXLeakyReluOp> activations;
+    for (Branch &branch : branches) {
+      auto activation = dyn_cast_or_null<ONNXLeakyReluOp>(
+          getSingleUser(branch.add.getResult()));
+      if (!activation || activation.getType() != branch.add.getType() ||
+          (!activations.empty() && activation.getAlphaAttr() !=
+                                       activations.front().getAlphaAttr())) {
+        activations.clear();
+        break;
+      }
+      activations.push_back(activation);
+    }
+    SmallVector<int64_t> shape(source.getShape());
+    shape.back() = weight.getDimSize(1);
+    auto combinedType = RankedTensorType::get(shape, rewriter.getF32Type());
+    Value projected = ONNXMatMulOp::create(
+        rewriter, op.getLoc(), combinedType, first.getData(), op.getB());
+    Value biased = ONNXAddOp::create(
+        rewriter, op.getLoc(), combinedType, projected, commonBias);
+    if (!activations.empty())
+      biased = ONNXLeakyReluOp::create(rewriter, op.getLoc(), combinedType,
+          biased, activations.front().getAlphaAttr());
+    for (auto [i, branch] : llvm::enumerate(branches)) {
+      Operation *replace = activations.empty() ? branch.add.getOperation()
+                                               : activations[i].getOperation();
+      rewriter.setInsertionPoint(replace);
+      Value result = ONNXGatherOp::create(rewriter, replace->getLoc(),
+          branch.add.getType(), biased, branch.gather.getIndices(), axis);
+      rewriter.replaceOp(replace, result);
+      if (!activations.empty())
+        rewriter.eraseOp(branch.add);
+      rewriter.eraseOp(branch.matmul);
+      rewriter.eraseOp(branch.gather);
+    }
+    return success();
+  }
+};
+
 // Move branch-local constant biases before a last-axis split, independently
 // of any head reshape or transpose that follows it. This also exposes a
 // preceding constant-weight projection to the downstream FC bias fusion.
@@ -1351,8 +1483,8 @@ public:
 void populateONNXToTFLTransformerPreprocessingPatterns(
     RewritePatternSet &patterns) {
   patterns.add<PackSplitProjectionPattern, PackSeparateProjectionPattern,
-      MoveSplitBiasBeforeSplitPattern, FuseTanhGeluPattern>(
-      patterns.getContext());
+      HoistGatherProjectionPattern, MoveSplitBiasBeforeSplitPattern,
+      FuseTanhGeluPattern>(patterns.getContext());
 }
 
 void populateTFLTransformerPostLoweringPatterns(RewritePatternSet &patterns) {

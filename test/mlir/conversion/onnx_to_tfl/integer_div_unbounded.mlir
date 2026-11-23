@@ -1,5 +1,5 @@
-// RUN: not onnx-mlir-opt --convert-onnx-to-tfl %s 2>&1 | FileCheck %s
-// RUN: not onnx-mlir-opt --convert-onnx-to-tfl='layout-mode=experimental' %s 2>&1 | FileCheck %s
+// RUN: onnx-mlir-opt --convert-onnx-to-tfl --verify-each %s | FileCheck %s
+// RUN: onnx-mlir-opt --convert-onnx-to-tfl='layout-mode=experimental' --verify-each %s | FileCheck %s
 
 module {
   func.func @unbounded_div(%x: tensor<2x3xi64>) -> tensor<2x3xi64> {
@@ -9,4 +9,11 @@ module {
   }
   "onnx.EntryPoint"() {func = @unbounded_div} : () -> ()
 }
-// CHECK: i64 Div requires an i32-representable dividend
+// CHECK-LABEL: func.func @main
+// CHECK: "tfl.minimum"
+// CHECK: "tfl.div"{{.*}} -> tensor<2x3xf32>
+// CHECK: "tfl.mul"{{.*}} -> tensor<2x3xi64>
+// CHECK: "tfl.sub"{{.*}} -> tensor<2x3xi64>
+// CHECK: "tfl.less_equal"
+// CHECK: "tfl.select_v2"{{.*}} -> tensor<2x3xi64>
+// CHECK: return
