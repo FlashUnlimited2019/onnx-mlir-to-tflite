@@ -38,15 +38,8 @@ FailureOr<Value> adaptRank4ElementwiseBroadcast(Operation *sourceOp,
 
   SmallVector<int64_t> resultLayout =
       getONNXToTFLPhysicalToLogicalLayout(sourceResultType);
-  if (resultLayout == SmallVector<int64_t>({0, 1, 2, 3}))
-    return convertedOperand;
-  if (resultLayout != SmallVector<int64_t>({0, 2, 3, 1})) {
-    sourceOp->emitError(
-        "lower-rank elementwise broadcast requires identity or channels-last "
-        "result layout");
-    return failure();
-  }
-
+  SmallVector<int64_t> operandLayout =
+      getONNXToTFLPhysicalToLogicalLayout(sourceOperandType);
   SmallVector<int64_t> logicalShape(4, 1);
   std::copy(sourceOperandType.getShape().begin(),
       sourceOperandType.getShape().end(), logicalShape.end() - operandRank);
@@ -56,10 +49,63 @@ FailureOr<Value> adaptRank4ElementwiseBroadcast(Operation *sourceOp,
     if (operandDim != 1 && operandDim != resultDim) {
       sourceOp->emitError()
           << "rank-4 elementwise operands are not broadcast-compatible in "
-             "logical NCHW order: operand "
+             "logical ONNX axis order: operand "
           << sourceOperandType << ", result " << sourceResultType;
       return failure();
     }
+  }
+
+  bool operandIsIdentity =
+      llvm::all_of(llvm::enumerate(operandLayout), [](auto axis) {
+        return static_cast<int64_t>(axis.index()) == axis.value();
+      });
+  if (operandIsIdentity && resultLayout == SmallVector<int64_t>({0, 1, 2, 3}))
+    return convertedOperand;
+
+  // Broadcast aligns logical suffix axes, not physical suffix axes. For a
+  // permuted result or operand, order the operand's existing axes as they
+  // occur in the result, then insert the missing singleton axes. This also
+  // handles layouts that move the logical batch axis away from the front.
+  if (!operandIsIdentity ||
+      resultLayout != SmallVector<int64_t>({0, 2, 3, 1})) {
+    SmallVector<int64_t> targetOperandLayout;
+    SmallVector<int64_t> broadcastShape;
+    for (int64_t axis : resultLayout) {
+      broadcastShape.push_back(logicalShape[axis]);
+      if (axis >= 4 - operandRank)
+        targetOperandLayout.push_back(axis - (4 - operandRank));
+    }
+    auto nonSingletonAxes = [&](ArrayRef<int64_t> layout) {
+      SmallVector<int64_t> axes;
+      for (int64_t axis : layout)
+        if (sourceOperandType.getShape()[axis] != 1)
+          axes.push_back(axis);
+      return axes;
+    };
+    Value value = convertedOperand;
+    if (nonSingletonAxes(operandLayout) !=
+        nonSingletonAxes(targetOperandLayout)) {
+      FailureOr<Value> reordered =
+          convertTFLValueLayout(rewriter, sourceOp->getLoc(), value,
+              stripONNXToTFLLayoutEncoding(sourceOperandType), operandLayout,
+              targetOperandLayout);
+      if (failed(reordered))
+        return failure();
+      value = *reordered;
+    }
+    // Leading singleton axes are implicit in TFLite broadcasting. Never
+    // remove interior singleton axes: they locate the logical suffix axes.
+    while (broadcastShape.size() > 1 && broadcastShape.front() == 1)
+      broadcastShape.erase(broadcastShape.begin());
+    auto broadcastType = RankedTensorType::get(
+        broadcastShape, sourceOperandType.getElementType());
+    if (value.getType() == broadcastType)
+      return value;
+    Value shape =
+        createI32ShapeConstant(rewriter, sourceOp->getLoc(), broadcastShape);
+    return createTFLOperation(rewriter, sourceOp->getLoc(), "tfl.reshape",
+        TypeRange{broadcastType}, ValueRange{value, shape})
+        ->getResult(0);
   }
 
   // A lower-rank ONNX operand aligns with the logical C/H/W suffix. TFLite

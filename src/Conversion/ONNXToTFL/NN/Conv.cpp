@@ -11,6 +11,13 @@ using namespace mlir;
 namespace onnx_mlir {
 namespace {
 
+// The generic FP32 DepthwiseConv2D runtime kernel uses a fixed accumulator.
+// Above this output-channel count its pixel-loop increment becomes zero in
+// affected release builds. Select an equivalent builtin Conv2D (with groups
+// inferred from its OHWI filter) instead. This is a runtime compatibility
+// bound, not a restriction on ONNX convolution or on other TFLite kernels.
+constexpr int64_t kMaxNativeDepthwiseOutputChannels = 4832;
+
 SmallVector<int64_t> getI64ArrayOr(
     Operation *op, StringRef name, ArrayRef<int64_t> defaultValues) {
   auto attr = op->getAttrOfType<ArrayAttr>(name);
@@ -253,7 +260,9 @@ LogicalResult lowerConv1D(ONNXConvOp op, ONNXConvOpAdaptor adaptor,
       resultType.getShape()[1] != outputChannels)
     return op.emitError("invalid grouped Conv1D channel dimensions"), failure();
   bool isDepthwise = group == inputChannels && filterType.getShape()[1] == 1;
-  bool isGrouped = group != 1 && !isDepthwise;
+  bool useDepthwise =
+      isDepthwise && outputChannels <= kMaxNativeDepthwiseOutputChannels;
+  bool isGrouped = group != 1 && !useDepthwise;
   int64_t depthMultiplier = 1;
   if (isDepthwise) {
     depthMultiplier = outputChannels / inputChannels;
@@ -310,7 +319,7 @@ LogicalResult lowerConv1D(ONNXConvOp op, ONNXConvOpAdaptor adaptor,
   Value filterPermutation;
   RankedTensorType transposedFilterType;
   RankedTensorType filter4DType;
-  if (!isDepthwise) {
+  if (!useDepthwise) {
     filterPermutation =
         createI32ShapeConstant(rewriter, op.getLoc(), {0, 2, 1});
     int64_t inputChannelsPerGroup = filterType.getShape()[1];
@@ -343,7 +352,7 @@ LogicalResult lowerConv1D(ONNXConvOp op, ONNXConvOpAdaptor adaptor,
   SmallVector<NamedAttribute> attributes =
       getConv2DAttributes(rewriter, dilations[0], 1, padding, strides[0], 1);
   StringRef opName = "tfl.conv_2d";
-  if (isDepthwise) {
+  if (useDepthwise) {
     attributes.push_back(rewriter.getNamedAttr(
         "depth_multiplier", rewriter.getI32IntegerAttr(depthMultiplier)));
     opName = "tfl.depthwise_conv_2d";
@@ -846,7 +855,9 @@ LogicalResult lowerConv3D(ONNXConvOp op, ONNXConvOpAdaptor adaptor,
       resultType.getShape()[1] != outputChannels)
     return op.emitError("invalid grouped Conv3D channel dimensions"), failure();
   bool isDepthwise = group == inputChannels && filterType.getShape()[1] == 1;
-  bool isGrouped = group != 1 && !isDepthwise;
+  bool useDepthwise =
+      isDepthwise && outputChannels <= kMaxNativeDepthwiseOutputChannels;
+  bool isGrouped = group != 1 && !useDepthwise;
   int64_t depthMultiplier = 1;
   if (isDepthwise) {
     depthMultiplier = outputChannels / inputChannels;
@@ -956,7 +967,7 @@ LogicalResult lowerConv3D(ONNXConvOp op, ONNXConvOpAdaptor adaptor,
   SmallVector<int64_t> filterPermutation;
   RankedTensorType orderedFilterType;
   RankedTensorType filter4DType;
-  if (!isDepthwise) {
+  if (!useDepthwise) {
     filterPermutation = {0, 2 + b, 2 + c, 1, 2 + a};
     int64_t inputChannelsPerGroup = filterType.getShape()[1];
     orderedFilterType = RankedTensorType::get(
@@ -991,7 +1002,7 @@ LogicalResult lowerConv3D(ONNXConvOp op, ONNXConvOpAdaptor adaptor,
   SmallVector<NamedAttribute> attributes = getConv2DAttributes(
       rewriter, dilations[b], dilations[c], padding, strides[b], strides[c]);
   StringRef opName = "tfl.conv_2d";
-  if (isDepthwise) {
+  if (useDepthwise) {
     attributes.push_back(rewriter.getNamedAttr(
         "depth_multiplier", rewriter.getI32IntegerAttr(depthMultiplier)));
     opName = "tfl.depthwise_conv_2d";
@@ -1072,7 +1083,9 @@ public:
       return op.emitError("invalid grouped Conv2D channel dimensions"),
              failure();
     bool isDepthwise = group == inputChannels && filterType.getShape()[1] == 1;
-    bool isGrouped = group != 1 && !isDepthwise;
+    bool useDepthwise =
+        isDepthwise && outputChannels <= kMaxNativeDepthwiseOutputChannels;
+    bool isGrouped = group != 1 && !useDepthwise;
     int64_t depthMultiplier = 1;
     if (isDepthwise) {
       if (resultType.getShape()[1] != outputChannels) {
@@ -1201,7 +1214,7 @@ public:
       return failure();
     filter = *channelsLastFilter;
     StringRef tflOpName = "tfl.conv_2d";
-    if (isDepthwise) {
+    if (useDepthwise) {
       // Generic rank-4 Constant lowering maps ONNX OIHW to OHWI. TFL
       // depthwise filters instead use [1,H,W,input_channels*multiplier].
       // Convert OHWI [M,H,W,1] to [1,H,W,M]; TensorFlow folds this transpose

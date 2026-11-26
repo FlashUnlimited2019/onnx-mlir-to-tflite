@@ -259,6 +259,14 @@ and output layouts agree. A logical transpose whose effect is already carried
 by the type encoding is removed. Operations that require a fixed physical
 layout receive explicit boundary conversions only where needed.
 
+For rank-four FP32 arithmetic and Min/Max, lower-rank operands broadcast along
+the logical ONNX suffix axes even when either operand has a permuted physical
+layout. Lowering orders the existing operand axes and inserts only the needed
+singleton dimensions. Reordering singleton axes requires only a reshape;
+non-singleton axis changes use a transpose. This handles permutations that
+move the logical batch axis, without expanding data or introducing rank-five
+intermediates, and retains the established legacy broadcast lowering.
+
 All experimental graph inputs and outputs retain their logical ONNX axis
 order, including rank four and values lowered through the legacy fallback.
 Boundary conversions are materialized when a non-identity permutation reaches
@@ -295,6 +303,33 @@ used with either layout mode.
 These transformations are applied during dialect conversion, after ONNX
 preprocessing and layout analysis have completed.
 
+### Constant embedding table selection
+
+An axis-zero `Gather` from an immutable FP32 matrix `[V,D]` can use the
+builtin `EmbeddingLookup` when `D >= 128`, its indices are runtime i32/i64
+tensors, and its static shapes fit the runtime's integer limits. Negative
+axes are normalized before matching. The width threshold is a conservative
+operator-selection policy, not a claim that all wide tables are learned
+embeddings. Narrow tables, runtime data, other axes and data types, constant
+indices, and empty or oversized shapes retain their existing lowering.
+
+Indices are flattened to rank one and converted to i32. Before narrowing i64,
+values outside `[-V,V)` are mapped to out-of-range sentinels so truncation
+cannot turn an invalid lookup into a valid row. Negative-index normalization
+also avoids overflow in unselected arithmetic branches. The result is reshaped
+and layout-converted as needed, preserving both layout modes' public contracts.
+If an integer maximum with a nonnegative constant proves indices nonnegative,
+the redundant negative-index normalization is omitted; upper-bound protection
+before i64 narrowing is retained.
+The original weight buffer is reused; matching does not inspect or copy its
+elements. Existing constant folding and static indexing rewrites run first.
+
+This selects a builtin with hybrid quantized-table support; it does not
+quantize weights. Generated tables remain FP32. Subsequent weight quantization
+requires compatible tooling and separate numerical validation. Additional
+index casts or reshapes can increase operator count, so latency should be
+measured on the intended runtime rather than inferred from graph size.
+
 ### Convolution rank reduction
 
 Convolution lowering selects the lowest exact implementation rank that can be
@@ -330,6 +365,20 @@ Non-reducible grouped Conv3D still uses split/convolve/concatenate around
 native Conv3D operations. Failed
 shape, grouping, padding, or output-extent checks simply disable rank
 reduction.
+
+FP32 depthwise convolutions with more than 4,832 output channels use a single
+builtin Conv2D instead of DepthwiseConv2D. This avoids a zero-step loop in
+affected native FP32 depthwise runtime kernels whose fixed accumulator holds
+4,832 values; it is a runtime compatibility policy, not a TFLite format limit.
+The group count is inferred from the input and OHWI filter shapes (or remains
+one for a single input channel). The policy applies to Conv1D, Conv2D, and
+removable-axis Conv3D lowering in both layout modes, including depth multipliers
+greater than one. For constant filters, the default TFL optimization stage
+folds filter reordering. Selecting this path introduces no per-group splitting,
+concatenation, or additional activation rank.
+Smaller depthwise convolutions retain their existing lowering. As with other
+grouped convolutions, the target backend must support implicit Conv2D groups;
+performance depends on its kernels and should be measured on that backend.
 
 ### Matrix and batch-rank optimization
 
