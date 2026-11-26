@@ -19,13 +19,21 @@
   Consumers must support TFLite buffer offsets. The external-data filename is
   currently auto-detected for the common `<model>.onnx.data`/`<model>.data`
   layouts; use `--use-buffer-offset` for other layouts.
-- ONNX control flow, sequences, maps, optionals, RNN/GRU, and functions beyond
-  the single graph entry point are unsupported. LSTM has a constrained static
-  lowering: layout 0 FP32 forward/reverse/bidirectional graphs with default
-  activations, constant W/R and optional constant B/sequence_lens, optional
-  runtime initial states, and no peepholes or input-forget coupling. The pass
-  fully unrolls the sequence and emits no While or TensorList operations, so
-  graph size grows linearly with sequence length and direction count.
+- ONNX control flow, sequences, maps, optionals, and functions beyond the
+  single graph entry point are unsupported.
+- RNN, GRU, and LSTM have constrained static lowering in both compiler layout
+  modes. They require FP32 tensors, the ONNX operator attribute `layout=0`,
+  constant W/R, and constant B when provided. Forward, reverse, and
+  bidirectional execution, optional runtime initial states, and optional
+  positive `clip` are supported. RNN and GRU require omitted `sequence_lens`;
+  RNN supports Tanh/Relu, while GRU requires default Sigmoid/Tanh activations
+  with activation attributes omitted and supports `linear_before_reset=0/1`.
+  LSTM requires default Sigmoid/Tanh/Tanh activations, accepts optional
+  constant `sequence_lens`, and does not support peepholes or input-forget
+  coupling. These paths statically unroll the sequence into builtin operations
+  without While or TensorList, so graph size grows with sequence length and
+  direction count. This is not general dynamic recurrent-network support;
+  see the [operator support matrix](operator-support.md) for detailed coverage.
 - MatMul operands are restricted to ranks 2-5, matching the pinned TFL
   BatchMatMul verifier. Rank-4 inputs/results use internal layout-restoring
   transposes so ONNX matrix axes are preserved. ONNX rank-1 MatMul promotion
