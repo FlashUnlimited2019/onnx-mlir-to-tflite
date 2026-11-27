@@ -94,7 +94,7 @@ export PATH=$ONNX_MLIR_ROOT/build/Debug/bin:$PATH
 export ONNX_MLIR_RUNTIME_DIR=../../build/Debug/lib
 ```
 
-You may also simply execute `chmod +x update_env.sh` and `./update_env.sh` for the above commands directly in the docs/docs/mnist_example and everything should work fine.
+You may also simply execute `chmod +x update_env.sh` and `./update_env.sh` for the above commands directly in the docs-onnx-mlir/mnist_example and everything should work fine.
 
 ## Compile Model
 

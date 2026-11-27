@@ -1,116 +1,305 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Layout policy
+# Layout Policy
 
-The layout contract is rank-sensitive:
+This document describes how ONNX-MLIR to TFLite represents, transforms,
+and preserves tensor layouts during lowering.
 
-- In the default `legacy` mode, exactly rank-4 FP32 activations use NHWC
-  inside the TFLite model.
-- Rank-1, rank-2, rank-3, and rank-5-or-higher graph boundaries retain the ONNX
-  axis order. Direct Conv3D fallback explicitly converts its local rank-5
-  region from NCDHW to NDHWC and back; no rank-5 ABI conversion is implied.
-- Rank-3 channel parameters such as BatchNorm's `[C,1,1]` constants are not
-  activations. When broadcast with a rank-4 activation they are reshaped to
-  `[1,1,C]`; their values are not reordered.
+Layout behavior depends on tensor rank, element type, the selected layout
+mode, and operator constraints. Equal tensor shapes do not imply equal layouts.
 
-The legacy graph signature itself uses NHWC for rank-4 FP32 inputs and outputs.
-No runtime boundary Transpose is inserted: callers pass NHWC to TFLite while ONNX
-Runtime receives the corresponding NCHW array. `test/e2e/run_similarity.py`
-performs this boundary adaptation. The internal convolution/pooling region
-stays NHWC. Non-rank-4 graph inputs and outputs keep their ONNX order.
+## Layout terminology
 
-In `experimental` mode, all graph inputs and outputs keep their original ONNX
-axis order, including rank four. Internal tensors may use different layouts;
-boundary Transposes connect these layouts only where needed. This also applies
-to operations that still use legacy lowering internally. Equal tensor extents
-do not imply equal layouts. Integer and boolean public tensors keep their ONNX
-axis order in both modes. Earlier experimental artifacts could expose mixed
-rank-4 layouts; see [Layout selection](convert-model.md#layout-selection) when
-regenerating or integrating them.
+- **Logical layout**: the original ONNX axis order and axis meaning.
+- **Physical layout**: the actual tensor axis order used by the lowered TFLite graph.
+- **Boundary layout**: the input/output layout exposed by the generated TFLite model.
+
+For conventional image tensors, the logical ONNX layout is often `NCHW`,
+while TFLite Conv2D and Pool2D operators use `NHWC`.
+
+## Layout modes and boundary contract
+
+| Property | `legacy` (default) | `experimental` |
+| --- | --- | --- |
+| Public rank-4 FP32 inputs/outputs | `[0, 2, 3, 1]` permutation (NCHW → NHWC) | Original ONNX axis order |
+| Other public tensors | Original ONNX axis order | Original ONNX axis order |
+| Internal layout policy | Rank-based, NHWC-oriented lowering | Per-value layout optimization |
+| Conv2D / Pool2D regions | NHWC | NHWC where required by the kernels |
+| Non-convolutional regions | NHWC-oriented for rank-4 FP32 | Inferred per value where supported |
+| Starting point | CNN-only models or an unfamiliar model | Transformer decoders or preserving the ONNX interface |
+
+These are practical starting points, not performance guarantees. Validate
+accuracy and latency on the target runtime when choosing a mode.
+
+![Legacy and experimental layout modes](assets/diagrams/layout-modes.svg)
+
+*Figure 1. Schematic comparison for conventional NCHW rank-4 FP32 activations
+and boundaries. Actual internal layouts and required Transpose operations
+depend on operator constraints and layout analysis; the diagram is not a
+fixed operator sequence.*
+
+### Legacy mode
+
+In the default `legacy` mode:
+
+- exactly rank-4 FP32 graph inputs and outputs use the `[0, 2, 3, 1]`
+  permutation at the public interface;
+- all other public tensors, including scalars, other ranks, and integer or
+  boolean tensors, keep their original ONNX axis order;
+- internal Conv2D and Pool2D regions stay NHWC-oriented.
+
+For conventional NCHW image tensors, callers therefore pass NHWC inputs and
+receive NHWC outputs. The permutation also applies to rank-4 FP32 boundaries
+with non-image semantics: the compiler does not infer whether their axes
+actually mean N, C, H, and W. No runtime boundary `Transpose` is inserted
+merely to preserve the original ONNX rank-4 FP32 interface.
+
+### Experimental mode
+
+In `experimental` mode:
+
+- all graph inputs and outputs keep their original ONNX axis order,
+  including rank-4 tensors;
+- internal tensors may use different physical layouts;
+- boundary layout conversions are inserted only where needed to connect the
+  public ONNX-order interface to internal layouts.
+
+Per-value layouts are used only where the relevant producers and consumers
+support them. Other regions retain the established lowering, with layout
+conversions where needed; this does not change the public boundary contract.
+Layout-only changes involving singleton axes may use Reshape instead of
+Transpose.
+
+> [!NOTE]
+> Earlier experimental artifacts may expose mixed rank-4 layouts.
+> Reconvert older models before relying on the current layout contract.
+
+## Axis mapping
+
+For rank-4 FP32 tensors in legacy lowering, logical ONNX axes map to
+physical TFL axes as follows. Image-axis names are illustrative.
+
+| Logical ONNX axis | Physical TFL axis |
+| --- | --- |
+| `0` (`N`) | `0` (`N`) |
+| `1` (`C`) | `3` (`C`) |
+| `2` (`H`) | `1` (`H`) |
+| `3` (`W`) | `2` (`W`) |
+
+The corresponding **transpose permutations** are:
+
+```python
+NCHW_to_NHWC = [0, 2, 3, 1]
+NHWC_to_NCHW = [0, 3, 1, 2]
+```
+
+A transpose permutation lists source axes in destination order; it is not
+the logical-to-physical axis-index mapping in the table.
 
 The operation-level NHWC mappings below describe legacy lowering and
-channels-last internal regions, not a requirement on experimental graph inputs
-or outputs.
+channels-last internal regions. They are **not** a requirement on
+experimental graph inputs or outputs.
 
-ONNX Conv2D weights use `[M, C/group, kH, kW]` (OIHW). TFL `conv_2d` filters
-use `[M, kH, kW, C/group]` (OHWI), so constant weights are transposed
-`[0, 2, 3, 1]` at compile time. Bias remains a rank-1 `[M]` tensor and is not
-layout-transformed.
-Runtime filters are explicitly converted from their tracked layout to OHWI
-before regular, grouped, or depthwise kernel selection; equal extents do not
-make this permutation optional.
-For true depthwise Conv, the intermediate `[M,kH,kW,1]` filter is converted to
-TFL's `[1,kH,kW,M]` depthwise layout; TensorFlow folds this constant transpose
-during TFL optimization.
+## Broadcasting and non-activation tensors
 
-This compile-time transpose is performed even when the numeric shape is
-unchanged, for example OIHW `[4,3,3,3]` and OHWI `[4,3,3,3]`.
+Not every tensor associated with a rank-4 computation is itself a rank-4
+activation. Lower-rank operands must broadcast against the logical ONNX
+suffix axes, even when the physical axis order differs.
 
-ONNX strides and dilations `[H, W]` map to TFL `stride_h`, `stride_w`,
-`dilation_h_factor`, and `dilation_w_factor`. `SAME_UPPER` can map to TFL
-`SAME`; `VALID` maps directly. Every nonzero `auto_pad=NOTSET` Conv padding is
-materialized as NHWC `tfl.pad` followed by `tfl.conv_2d` with `VALID`.
-This is necessary because TFL `SAME` and ONNX explicit symmetric padding can
-choose different top/left alignment when stride is greater than one. MaxPool
-uses `tfl.padv2` with the lowest finite f32 value, then `VALID`, so padded cells
-cannot win the maximum. Standalone rank-4 Pad maps ONNX's `[N,C,H,W]`
-begin/end vector to an NHWC `[4,2]` matrix; other ranks keep their logical axis
-order. Constant Pad uses `tfl.padv2`, reflect uses `tfl.mirror_pad`, and edge
-padding is represented exactly with boundary Slice, Tile, and Concatenation.
-`SAME_LOWER` remains outside the Conv1D/2D path. Direct Conv3D materializes its
-static lower-biased padding and runs with `VALID`.
+For FP32 elementwise operations producing a legacy rank-4 result:
 
-Conv1D starts in logical NCL order. It is transposed to NLC, reshaped to
-`[N,L,1,C]`, evaluated by Conv2D, and transposed back to NCL. ONNX Conv1D
-filters `[M,C/group,k]` become `[M,k,1,C/group]` (or the corresponding TFL
-depthwise layout).
+| Logical ONNX operand | NHWC-compatible broadcast form |
+| --- | --- |
+| `[C, 1, 1]` | Reshape to `[1, 1, C]` |
+| `[W]` | Reshape to `[1, W, 1]` |
+| `[H, W]` | Reshape to `[H, W, 1]` |
+| `[C, H, W]` | Transpose to `[H, W, C]`, or Reshape if only singleton axes move |
 
-A Conv3D with any spatial axis satisfying `kernel=1`, `stride=1`, and zero
-explicit padding on that axis is exactly reducible without a Conv3D runtime
-operator. The lowering permutes NCDHW so that preserved axis is adjacent to
-batch, folds it into batch, runs Conv2D over the other two axes, then restores
-NCDHW. This includes the requested `(1,h,w)` and `(d,1,1)` kernels and also the
-safe `(d,1,w)` and `(d,h,1)` families. The `(d,1,1)` case is semantically
-Conv1D; because TFLite has no builtin Conv1D, it is represented as Conv2D with
-a singleton kernel dimension. Rank-5 graph boundaries themselves remain
-NCDHW.
+For example, BatchNorm-style `[C, 1, 1]` channel parameters only require a
+reshape; their values are not reordered.
 
-Regular, grouped, and true depthwise convolution are supported by these rank
-lowerings. Depthwise validates the channel multiplier and materializes the TFL
-filter layout `[1,kH,kW,input_channels*multiplier]`. A non-depthwise grouped
-Conv is decomposed into channel/filter/bias splits, one Conv2D per group, and a
-channel concatenation.
+In experimental rank-4 FP32 arithmetic and Min/Max lowering, the compiler
+also accounts for independently permuted lower-rank operands and result
+layouts. It aligns logical suffix axes, reorders non-singleton axes only
+when necessary, and inserts the required singleton dimensions. This preserves
+broadcasting without expanding the operand data or introducing rank-5
+intermediates for this adaptation.
 
-If no exact Conv3D reduction applies, the pass explicitly transposes NCDHW to
-NDHWC, converts ONNX filters from `[M,C/group,kD,kH,kW]` to TFL
-`[kD,kH,kW,C/group,M]`, emits `tfl.conv_3d`, and transposes the result back to
-NCDHW. TFL Conv3D has no group attribute, so grouped and depthwise cases split
-input/filter/bias by group, emit one ordinary Conv3D per group, and concatenate
-the NDHWC outputs. Thus future reduction rules can be inserted before this
-fallback without changing graph ABI or correctness.
+## Convolution layouts
 
-Legacy conversion remaps rank-4 types once while lowering the graph rather than
-inserting repeated runtime transposes. Rank-4 Concat and Slice axes, including
-the full vectors for positive-step StridedSlice and the axes used to implement
-negative steps with ReverseV2, are remapped. Transpose
-permutations are translated from logical NCHW to physical
-NHWC, and Resize consumes/produces NHWC directly. Reshape crossing rank 4 and
-Softmax on a non-final physical axis use explicit internal transposes where
-preserving ONNX row-major or axis semantics requires them. Rank-4 MatMul is
-temporarily transposed from physical NHWC back to logical ONNX order around
-BatchMatMul, then returned to NHWC if its result is rank 4. Rank-4 ReduceSum
-and ReduceMax use the same logical-order restoration. Rank-4 Split maps its
-logical axis to the corresponding physical axis. Rank-4 Flatten similarly transposes
-physical NHWC back to logical NCHW before its rank-2 reshape, as required by
-ONNX row-major order.
-For binary elementwise operations with a rank-4 result, lower-rank ONNX
-operands align with the logical C/H/W suffix rather than the physical H/W/C
-suffix. Rank-1 `[W]` and rank-2 `[H,W]` operands are therefore reshaped to
-`[1,W,1]` and `[H,W,1]`; a general rank-3 `[C,H,W]` operand is transposed to
-`[H,W,C]`. This preserves numpy broadcasting without transposing the main
-rank-4 activation away from NHWC.
-Importer-generated UpsampleAndPad inserts zeros directly along physical NHWC
-height and width. Decomposed ConvTranspose does not require legacy graph-boundary
-transposes; experimental mode bridges its public ONNX-order interface as needed.
-The driver passes `--disable-conv-to-matmul` so `onnx.Conv` remains available
-to this layout-aware lowering.
+### Conv2D filters
+
+ONNX Conv2D weights use `[M, C/group, kH, kW]` (OIHW), while TFL `conv_2d`
+expects `[M, kH, kW, C/group]` (OHWI). The conversion uses permutation
+`[0, 2, 3, 1]`; bias remains a rank-1 `[M]` tensor.
+
+Constant filters are reordered at compile time, either during constant
+lowering or by folding filter transformations in the optional TFL optimizer.
+Runtime or computed filters are converted from their tracked layout to OHWI
+before kernel selection. Disabling TFL optimization can leave explicit filter
+transformations in the graph.
+
+Equal numeric shapes do not make the permutation optional: OIHW `[4, 3, 3, 3]`
+and OHWI `[4, 3, 3, 3]` still represent different axis orders.
+
+Non-depthwise grouped Conv2D uses one builtin `conv_2d`, with groups inferred
+from the input and filter channel dimensions. It does not split into one
+operator per group; the target backend must support implicit Conv2D groups.
+
+### Depthwise Conv2D
+
+For depthwise convolution, filters normally use TFL's
+`[1, kH, kW, M]` layout, where `M = input_channels * depth_multiplier`.
+The optional TensorFlow/LiteRT optimizer folds constant filter transformations.
+
+As a runtime compatibility measure, FP32 depthwise convolutions with more
+than 4,832 output channels instead use one builtin `conv_2d` with OHWI
+filters and implicit grouping. This avoids a limitation in affected native
+FP32 depthwise kernels; it is not a TFLite format limit. The rule also applies
+to Conv1D and removable-axis Conv3D lowered through Conv2D, in both modes.
+It adds no per-group splits or concatenation and requires grouped-Conv2D
+support in the target backend.
+
+### Conv1D lowering
+
+ONNX Conv1D starts in logical `NCL` order. The local lowering:
+
+1. transposes `NCL` to `NLC`;
+2. reshapes to `[N, L, 1, C]`;
+3. evaluates the convolution through Conv2D;
+4. removes the singleton spatial axis and transposes back to `NCL`.
+
+ONNX filters `[M, C/group, k]` become `[M, k, 1, C/group]`, or the
+corresponding TFL depthwise layout. Subsequent graph optimization may remove
+redundant reshapes or transposes around this sequence.
+
+### Conv3D reduction and fallback
+
+A spatial axis can be removed from Conv3D when its kernel extent and stride
+are both one, it has no effective padding, and its input and output extents
+are equal. The current reduction paths accept supported `NOTSET`, `VALID`,
+and `SAME_UPPER` configurations; `SAME_LOWER` uses the direct Conv3D fallback.
+
+The removable-axis lowering permutes `NCDHW` so the preserved spatial axis
+is adjacent to batch, folds that axis into batch, runs Conv2D over the
+remaining two spatial axes, and restores logical output order.
+
+With the required stride and padding conditions, this includes kernels
+`(1, h, w)`, `(d, 1, 1)`, `(d, 1, w)`, and `(d, h, 1)`. The `(d, 1, 1)`
+case is effectively Conv1D, represented by Conv2D with a singleton kernel
+dimension because TFLite has no builtin Conv1D.
+
+Two additional reductions apply to group-one convolutions with unit depth
+dilation and no depth padding:
+
+- **Full-depth kernel:** the depth kernel covers the entire input depth and
+  produces one output depth position; depth and input channels are merged.
+- **Nonoverlapping depth windows:** depth stride equals depth kernel size,
+  the kernel size exceeds one, and the windows exactly tile the input depth;
+  output depth is folded into batch and kernel depth into channels.
+
+Compatible surrounding layout operations can also be eliminated. These
+reductions do not imply a general rank-4 activation limit or change rank-5
+public interfaces. See [Convolution rank reduction](compiler-optimizations.md#convolution-rank-reduction)
+for matching conditions and layout-chain optimizations.
+
+If no supported reduction applies, direct Conv3D uses:
+
+- input: `NCDHW` → `NDHWC`;
+- filters: `[M, C/group, kD, kH, kW]` → `[kD, kH, kW, C/group, M]`;
+- operation: `tfl.conv_3d`;
+- output: `NDHWC` → `NCDHW`.
+
+Non-reducible grouped and depthwise Conv3D split input, filters, and bias
+by group, emit one ordinary Conv3D per group, and concatenate the outputs.
+This differs from the implicit grouping used by Conv2D.
+
+## Padding semantics
+
+ONNX explicit padding and TFLite `SAME` padding can select different
+alignments, especially with strides greater than one.
+
+### Convolution
+
+- `SAME_UPPER` maps to TFL `SAME`; `VALID` maps directly.
+- Nonzero explicit `auto_pad=NOTSET` padding is materialized in the physical
+  input layout, followed by convolution with `VALID`. For Conv2D, this is an
+  NHWC `tfl.pad` followed by `tfl.conv_2d` or `tfl.depthwise_conv_2d`.
+- Conv1D/2D do not support `SAME_LOWER`. Direct Conv3D supports it by computing
+  static lower-biased padding, materializing the padding, and using `VALID`.
+
+Later optimization may absorb explicit padding when equivalence can be proved.
+
+### Pooling and Pad
+
+The native rank-4, single-output MaxPool path maps `SAME_UPPER` to `SAME`
+and `VALID` directly.
+Nonzero explicit padding uses NHWC `tfl.padv2` followed by pooling with `VALID`.
+Its fill value is the lowest finite `f32` value, not negative infinity;
+models relying on `-inf` or NaN behavior require separate numerical validation.
+Other pooling forms have their own attribute and rank constraints; see the
+[operator support matrix](operator-support.md).
+
+Standalone Pad supports static rank-1 through rank-5 FP32 tensors with
+supported nonnegative padding:
+
+- rank-4 logical `[N, C, H, W]` begin/end vectors map to an NHWC `[4, 2]`
+  padding matrix inside the Pad lowering;
+- other ranks retain their logical axis order;
+- constant padding uses `tfl.padv2`;
+- reflect padding uses `tfl.mirror_pad`;
+- edge padding uses boundary Slice, Tile, and Concat operations.
+
+Experimental mode bridges this lowering to the selected surrounding layouts
+as needed; it does not change the public ONNX-order interface.
+
+## Layout-sensitive operations
+
+Axis-sensitive lowering preserves logical ONNX semantics while adapting
+operations to their physical layouts. Representative cases include:
+
+| Operation | Behavior |
+| --- | --- |
+| `Concat` / `Split` | Remap the logical concatenation or split axis to the physical axis. |
+| `Slice` | Remap axes and slicing parameters; negative steps may use ReverseV2. |
+| `Transpose` | Translate logical permutations to physical order; eliminate an operation when the layout encoding already represents its effect. |
+| `Resize` | Native 2D resize paths use NHWC; other supported configurations use logical-axis decompositions. |
+| `Reshape` / `Squeeze` / `Unsqueeze` | Preserve logical element order, using layout conversions when required; compatible singleton-only changes remain reshapes. |
+| `Flatten` | Restore logical element order before the rank-2 reshape when necessary. |
+| `Softmax` | Map the logical axis, move it to the last physical dimension if needed, then restore the physical order. |
+| `MatMul` | Preserve logical batch and matrix axes; use layout conversions or absorb compatible permutations into matrix operations. |
+| `ReduceMean` / `ReduceSum` / `ReduceMax` | Use mapped reduction axes and result layouts where supported; legacy paths may restore logical order around the reduction. |
+
+The final graph can contain fewer layout operations than these local
+lowering sequences after redundant operations are removed. This is an
+optimization opportunity, not a guarantee that every Transpose is removable.
+
+## Diagnostics and validation
+
+To select experimental mode and print a layout analysis summary:
+
+```bash
+./bin/onnx-to-tflite model.onnx -o model.tflite \
+  --layout-mode experimental --layout-diagnostics summary
+```
+
+Diagnostic levels are `none` (default), `summary`, and `values`; `values`
+includes per-value information. Diagnostics are read-only and can be used
+with either mode. They do not change the selected layout policy or describe
+every optimization in the final graph. For a source build, use
+`./build/bin/onnx-to-tflite` instead.
+
+For end-to-end numerical checking, use the comparison utility described in
+[Convert an ONNX Model](convert-model.md#numerical-validation). Always use
+the same ONNX model and layout mode as the conversion.
+
+> [!WARNING]
+> Do not infer layout from tensor shapes alone. A permutation may leave the
+> numeric shape unchanged while still changing the semantic axis order.
+
+## Further reading
+
+- [Convert an ONNX Model](convert-model.md)
+- [Compiler optimizations](compiler-optimizations.md)
+- [Operator support](operator-support.md)
+- [Known limitations](known-limitations.md)

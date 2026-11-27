@@ -14,7 +14,7 @@
 //
 // 1) cd onnx-mlir/build
 // 2) make onnx-mlir-docs
-// 3) the newly build krnl.md file resides in the docs/Dialects directory.
+// 3) the newly built krnl.md file resides in docs-onnx-mlir/Dialects.
 //===----------------------------------------------------------------------===//
 
 include "mlir/IR/OpBase.td"

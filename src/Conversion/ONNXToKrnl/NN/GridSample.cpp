@@ -16,8 +16,8 @@
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
 
 // Enable optimized bilinear 2D GridSample implementation (0 is disabled).
-// See docs/optimization-onnx-lowering/GridSample.md for explanation of the
-// approach.
+// See docs-onnx-mlir/optimization-onnx-lowering/GridSample.md for an
+// explanation of the approach.
 #define ENABLE_GRIDSAMPLE_BILINEAR_OPT 1
 
 using namespace mlir;

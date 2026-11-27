@@ -121,7 +121,7 @@ There is a convenient command to update both the ONNX and Krnl dialect, as shown
 ```
 make onnx-mlir-docs
 ```
-The above command is run in the usual `build` directory and it will install the new dialect md files directly into the `docs/Dialects` directory.
+The above command is run in the usual `build` directory and it will install the new dialect md files directly into the `docs-onnx-mlir/Dialects` directory.
 
 The same command should be used when adding operations/making changes to the Krnl dialect.
 

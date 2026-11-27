@@ -21,9 +21,11 @@ container_workdir = os.path.join(docker_usr_image_workdir, MNIST_DIR)
 def main():
     os.makedirs(workspace_workdir)
 
-    # Copy docs/mnist_example/mnist.onnx to workspace_workdir
+    # Copy docs-onnx-mlir/mnist_example/mnist.onnx to workspace_workdir
     shutil.copy(
-        os.path.join(jenkins_workspace_dir, "docs", "mnist_example", MNIST_ONNX),
+        os.path.join(
+            jenkins_workspace_dir, "docs-onnx-mlir", "mnist_example", MNIST_ONNX
+        ),
         os.path.join(workspace_workdir, MNIST_ONNX),
     )
 

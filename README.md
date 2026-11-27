@@ -2,7 +2,7 @@
 <!-- Modified by FlashUnlimited2019 in 2026. -->
 
 <p align="center">
-  <img src="docs/logo/onnx-mlir-to-tflite-banner-2.svg" alt="ONNX-MLIR to TFLite" width="420">
+  <img src="docs/assets/logo/onnx-mlir-to-tflite-banner-2.svg" alt="ONNX-MLIR to TFLite" width="420">
 </p>
 
 <p align="center">
@@ -286,6 +286,9 @@ repository layout, and instructions for reusing existing TensorFlow tools.
 
 ## Documentation
 
+Start with the [documentation index](docs/README.md) for this project's guides
+and technical references.
+
 | Document | Description |
 | --- | --- |
 | [Model conversion](docs/convert-model.md) | Driver usage, layout selection, diagnostics, and command-line options |
@@ -296,8 +299,9 @@ repository layout, and instructions for reusing existing TensorFlow tools.
 | [Build guide](docs/build.md) | Complete LLVM/MLIR, ONNX-MLIR, and TensorFlow/LiteRT build procedure |
 | [Known limitations](docs/known-limitations.md) | Unsupported configurations and implementation constraints |
 
-The original ONNX-MLIR documentation remains available under `docs/` and at
-[onnx.ai/onnx-mlir](https://onnx.ai/onnx-mlir/).
+Inherited ONNX-MLIR documentation is kept separately under
+[docs-onnx-mlir/](docs-onnx-mlir/README.md). It describes the upstream compiler,
+not the capabilities or build requirements of this project's TFLite pipeline.
 
 ## Project Lineage and License
 

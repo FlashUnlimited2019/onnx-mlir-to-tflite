@@ -374,7 +374,7 @@ bool shouldDecomposeConvTransposeOp(Value convTransposeResult) {
 // 3. Regular Conv operation
 //
 // For detailed explanation of this decomposition approach, see:
-// docs/optimization-onnx-lowering/ConvTranspose.md
+// docs-onnx-mlir/optimization-onnx-lowering/ConvTranspose.md
 struct DecomposeConvTransposePattern
     : public OpRewritePattern<ONNXConvTransposeOp> {
   using OpRewritePattern<ONNXConvTransposeOp>::OpRewritePattern;

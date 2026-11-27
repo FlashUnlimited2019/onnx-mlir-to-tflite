@@ -241,7 +241,7 @@ class ONNX_Op<string mnemonic, list<Trait> traits = []> :
 //   CC=gcc CXX=g++ pip install -e .
 // run the script
 //   python onnx/defs/gen_doc.py
-// result is in docs/onnx_ops.td.inc
+// The generated operation declarations are in ONNXOps.td.inc.
 // current limitations:
 //  1. Attributes are not processed
 //  2. output type inference not implemented except Add

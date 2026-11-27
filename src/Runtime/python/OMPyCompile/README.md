@@ -22,7 +22,8 @@ A complete example with compilation and run can be found in tests/run-matmul.py.
 
 ## Create the pacakge
 ### Build standalone compiler
-Refer to docs/BuildStandAlone.md to build the standalone compiler. 
+Refer to the [upstream standalone build guide](../../../../docs-onnx-mlir/BuildStandalone.md)
+to build the standalone compiler.
 Assume that the path of the standalone compiler is onnx-mlir/build-standalone/Debug.
 ### Create and install the package
 Refere to TBD (temporarily use README.md in of om_pyrt package).

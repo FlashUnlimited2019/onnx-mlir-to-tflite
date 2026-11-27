@@ -46,12 +46,12 @@ The onnx-mlir-dev image contains the full build tree including the prerequisites
 The source can be modified and `onnx-mlir` can be rebuilt from within the container, so it is possible to use it as a development environment.
 New pull requests can be generated, and the repository can be updated to the latest using git commands.
 It is also possible to attach vscode to the running container.
-An example Dockerfile useful for development and vscode configuration files can be seen in the [docs/docker-example](docker-example) folder.
+An example Dockerfile useful for development and vscode configuration files can be seen in the [docs-onnx-mlir/docker-example](docker-example) folder.
 If the workspace directory and the vscode files are not present in the directory where the Docker build is run, then the lines referencing them should be commented out or deleted.
 
-The Dockerfile is shown here, and should be modified according to one's need. The file below includes debugging tools as well as pytorch, which can be used to train the mnist model in our end-to-end example provided in the [docs/mnist_example](mnist_example) directory.
+The Dockerfile is shown here, and should be modified according to one's need. The file below includes debugging tools as well as pytorch, which can be used to train the mnist model in our end-to-end example provided in the [docs-onnx-mlir/mnist_example](mnist_example) directory.
 
-[same-as-file]: <> (docs/docker-example/Dockerfile)
+[same-as-file]: <> (docs-onnx-mlir/docker-example/Dockerfile)
 ```
 FROM ghcr.io/onnxmlir/onnx-mlir-dev
 WORKDIR /workdir
@@ -105,7 +105,7 @@ ENV NPROC=4
 ENV PATH=$PATH:/workdir/onnx-mlir/build/Debug/bin/:/workdir/onnx-mlir/build/Debug/lib:/workdir/llvm-project/build/bin
 ```
 
-The first step is to copy the [docs/docker-example](docker-example) directory to another directory outside of the repo, say `~/DockerOnnxMlir`. Or simply download the `Dockerfile` and the `.vscode` file if you intend to use VSCode.
+The first step is to copy the [docs-onnx-mlir/docker-example](docker-example) directory to another directory outside of the repo, say `~/DockerOnnxMlir`. Or simply download the `Dockerfile` and the `.vscode` file if you intend to use VSCode.
 
 Then, the `Dockerfile` in the copied directory should then be modified to suit one's need. In particular, we recommend developers to use their own fork for development. Uncomment the lines associated with git (Step 5 in the file) and substitute the appropriate GitHub Id in the commented out directives. 
 The lines associated with VSCode (Step 3 in the file) should be also uncommented when using VSCode. 
@@ -117,7 +117,7 @@ The next step is to create a Docker image. This step can be performed using the 
 These steps are summarized here.
 ``` shell
 # Starting in the onnx-mlir directory, copy the Docker example directory.
-cp -prf docs/docker-example ~/DockerOnnxMlir
+cp -prf docs-onnx-mlir/docker-example ~/DockerOnnxMlir
 cd ~/DockerOnnxMlir
 # Edit the Dockerfile.
 vi Dockerfile
@@ -130,7 +130,7 @@ docker run -it ghcr.io/onnxmlir/onnx-mlir-dev
 **NOTE:** If you are using a MacBook with the Apple M1 chip, please follow the steps below for configuration:
 ``` shell
 # Starting in the onnx-mlir directory, copy the Docker example directory.
-cp -prf docs/docker-example ~/DockerOnnxMlir
+cp -prf docs-onnx-mlir/docker-example ~/DockerOnnxMlir
 cd ~/DockerOnnxMlir
 # Edit the Dockerfile.
 vi Dockerfile
@@ -175,14 +175,14 @@ git push --set-upstream origin main
 A Docker container can be used to investigate a bug, or to develop a new feature. Some like to create a new images for each new version of ONNX-MLIR; others prefer to create one image and use git to update the main branch and use git to switch between multiple branches. Both are valid approaches.
 
 ## Using a devcontainer
-Another way of building onnx-mlir for development in VSCode is using a devcontainer. This way you only mount your source folder, meaning that changes you do are saved on your local machine. For this setup to work you need a `Dockerfile` and a `devcontainer.json` file. Both are provided in `docs/devcontainer-example`. 
+Another way of building onnx-mlir for development in VSCode is using a devcontainer. This way you only mount your source folder, meaning that changes you do are saved on your local machine. For this setup to work you need a `Dockerfile` and a `devcontainer.json` file. Both are provided in `docs-onnx-mlir/devcontainer-example`.
 
 The [`Dockerfile`](devcontainer-example/Dockerfile.llvm-project) is a simple Dockerfile based on the precompiled LLVM/MLIR image that is shared. It installs additional software that is useful for developing and also sets `LLVM_PROJECT_ROOT` to easily refer to the LLVM path.
 
 
 The [`devcontainer.json`](devcontainer-example/devcontainer.json) is a minimal example that only configures the container build, workspace mount, and `postAttachCommand` used to install ONNX. Additional developer-specific customizations, such as IDE settings or extension recommendations, can be configured by adding them under the `customizations` section. For the general `devcontainer.json` specification, see the [Dev Container metadata reference](https://containers.dev/implementors/json_reference). For Visual Studio Code-specific devcontainer configuration examples, see [Create a Dev Container](https://github.com/microsoft/vscode-docs/blob/main/docs/devcontainers/create-dev-container.md).
 
-To use this setup you first clone onnx-mlir and all submodules (for example with` git clone --recursive https://github.com/onnx/onnx-mlir.git`). You then create a new folder named `.devcontainer` in the source root. After that you copy the two files in `docs/devcontainer-example` into that folder. Now simply press `CTRL+SHIFT+P` and execute `Dev Containers: Reopen in Container`. VSCode will now create the docker image and mount the source folder.
+To use this setup you first clone onnx-mlir and all submodules (for example with` git clone --recursive https://github.com/onnx/onnx-mlir.git`). You then create a new folder named `.devcontainer` in the source root. After that you copy the two files in `docs-onnx-mlir/devcontainer-example` into that folder. Now simply press `CTRL+SHIFT+P` and execute `Dev Containers: Reopen in Container`. VSCode will now create the docker image and mount the source folder.
 
 You can now configure onnx-mlir as described in [BuildOnLinuxOSX](BuildOnLinuxOSX.md). `MLIR_DIR` is already set for you, so you can skip that step.
 

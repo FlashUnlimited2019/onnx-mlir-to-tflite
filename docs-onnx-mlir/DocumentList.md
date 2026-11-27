@@ -1,14 +1,15 @@
 <!--- SPDX-License-Identifier: Apache-2.0 -->
 
 # Index of documents
-This document serves as an index for onnx-mlir documents.
+This document indexes inherited ONNX-MLIR reference material. For this project's
+ONNX-to-TFLite pipeline, use the [project documentation](../docs/README.md).
 
 # About
 * [ONNXAI.md](ONNXAI.md) gives a short introduction to the project and how to get in touch (Slack channel).
 
 # Installation and working environment
 * [Prerequisite.md](Prerequisite.md) lists the software required to build onnx-mlir.
-* Installation is covered by [README.md](../README.md), with OS-specific details in [BuildOnLinuxOSX.md](BuildOnLinuxOSX.md) and [BuildOnWindows.md](BuildOnWindows.md).
+* Upstream installation is covered by [BuildOnLinuxOSX.md](BuildOnLinuxOSX.md) and [BuildOnWindows.md](BuildOnWindows.md). For this project's TFLite toolchain, use the separate [build guide](../docs/build.md).
 * [BuildONNX.md](BuildONNX.md) describes how to install `third_party ONNX` for backend tests or to regenerate ONNX operations.
 * [BuildStandalone.md](BuildStandalone.md) describes how to build onnx-mlir as a standalone binary, without a full LLVM/MLIR build tree.
 * [Docker.md](Docker.md) describes how to build and develop onnx-mlir using Docker, and [DockerInDocker.md](DockerInDocker.md) covers Docker-in-Docker support.

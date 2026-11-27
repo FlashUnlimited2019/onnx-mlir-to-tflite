@@ -117,6 +117,10 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+docs-onnx-mlir/_build/
+docs-onnx-mlir/_site/
+docs-onnx-mlir/.jekyll-cache/
+docs-onnx-mlir/doxygen_html/
 
 # PyBuilder
 target/

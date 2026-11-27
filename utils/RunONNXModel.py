@@ -91,7 +91,7 @@ def import_driver():
                 " To compile a model, you can either\n 1) install the onnxmlir package to use the compiler container,"
                 " or\n 2) set environment variable ONNX_MLIR_HOME to use the native compiler.\n"
                 " The execution of the two approaches just failed in your environment."
-                " For trouble shooting, please refer to docs/DebuggingNumericalError.md for details"
+                " For trouble shooting, please refer to docs-onnx-mlir/DebuggingNumericalError.md for details"
             )
     return SessionWrapper
 

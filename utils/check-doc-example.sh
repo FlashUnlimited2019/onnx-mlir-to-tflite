@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-# Build and run docs/doc_example tests
+# Build and run docs-onnx-mlir/doc_example tests
 cd onnx-mlir/build
 cmake --build . --target check-doc-example

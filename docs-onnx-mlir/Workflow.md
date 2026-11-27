@@ -70,7 +70,7 @@ Define a local working directory:
 working_dir={your working directory}
 ```
 
-Then follow the directions in this section of the top level [README](../README.md) and OS specific instructions [Linux](BuildOnLinuxOSX.md#MLIR) or [Windows](BuildOnWindows.md#MLIR) for installing the currently supported MLIR version in your working directory.
+Then follow the upstream instructions for [Linux](BuildOnLinuxOSX.md#mlir) or [Windows](BuildOnWindows.md#mlir) to install the corresponding MLIR version. For this project's TFLite toolchain, use the separate [build guide](../docs/build.md).
 
 If you already have an MLIR copy in your working directory, you should ensure that you have the latest copy. To do so, compare the most recent commit ID from a `git log` command with the specific branch version extracted by the `git checkout` command listed [here](BuildOnLinuxOSX.md#MLIR). If your MLIR in not up to date, you must  bring it up to the correct commit level by either reinstalling it or updating it with `git fetch`, `git merge`, and `git checkout` commands.
 

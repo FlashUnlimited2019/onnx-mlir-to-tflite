@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="550" viewBox="0 0 1000 550" role="img" aria-labelledby="title desc">
+  <title id="title">Legacy and experimental layout modes</title>
+  <desc id="desc">A schematic example with conventional NCHW rank-4 FP32 activations and boundaries, not a fixed operator sequence. Legacy mode exposes NHWC input and output and uses NHWC-oriented internal lowering. Experimental mode preserves the original ONNX input and output axis order and infers internal layouts per value where supported. Conv2D and Pool2D use NHWC; required layout conversions depend on operator constraints and layout analysis.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 2 1 L 8 5 L 2 9" fill="none" stroke="#a6adb6" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; text-anchor: middle; }
+      .heading { font-size: 23px; font-weight: 700; fill: #f0f3f6; }
+      .subheading { font-size: 17px; fill: #b7c0c9; }
+      .label { font-size: 20px; font-weight: 600; fill: #f0f3f6; }
+      .detail { font-size: 17px; fill: #c2cad2; }
+      .boundary { fill: #0d1117; stroke: #343b44; stroke-width: 1; }
+      .legacy { fill: #20262e; stroke: #46505b; stroke-width: 1.2; }
+      .experimental { fill: #192b2c; stroke: #38998e; stroke-width: 1.3; }
+      .link { stroke: #a6adb6; stroke-width: 1.6; fill: none; marker-end: url(#arrow); stroke-linecap: round; }
+      .note { font-size: 15px; fill: #aeb8c2; text-anchor: start; }
+    </style>
+  </defs>
+  <rect x="10" y="10" width="980" height="530" rx="20" fill="#171b21" stroke="#3a424c" stroke-width="1.2"/>
+  <!-- Mode headings -->
+  <text x="261" y="53" class="heading">Legacy</text>
+  <text x="261" y="80" class="subheading">Rank-based layout policy (default)</text>
+  <text x="739" y="53" class="heading">Experimental</text>
+  <text x="739" y="80" class="subheading">Per-value layout policy</text>
+  <!-- Input boundary -->
+  <rect x="31" y="98" width="460" height="52" rx="10" class="boundary"/>
+  <rect x="509" y="98" width="460" height="52" rx="10" class="boundary"/>
+  <text x="261" y="131" class="label">NHWC Input</text>
+  <text x="739" y="131" class="label">ONNX-order Input</text>
+  <path d="M261 158 V181" class="link"/>
+  <path d="M739 158 V181" class="link"/>
+  <!-- Convolution / pooling -->
+  <rect x="31" y="189" width="460" height="76" rx="10" class="legacy"/>
+  <rect x="509" y="189" width="460" height="76" rx="10" class="experimental"/>
+  <text x="261" y="219" class="label">Conv2D / Pool2D</text>
+  <text x="261" y="245" class="detail">NHWC</text>
+  <text x="739" y="219" class="label">Conv2D / Pool2D</text>
+  <text x="739" y="245" class="detail">NHWC (channels-last)</text>
+  <path d="M261 273 V296" class="link"/>
+  <path d="M739 273 V296" class="link"/>
+  <!-- Internal layouts -->
+  <rect x="31" y="304" width="460" height="76" rx="10" class="legacy"/>
+  <rect x="509" y="304" width="460" height="76" rx="10" class="experimental"/>
+  <text x="261" y="334" class="label">Rank-4 FP32 regions</text>
+  <text x="261" y="360" class="detail">NHWC-oriented</text>
+  <text x="739" y="334" class="label">Non-convolutional regions</text>
+  <text x="739" y="360" class="detail">Per-value layouts where supported</text>
+  <path d="M261 388 V411" class="link"/>
+  <path d="M739 388 V411" class="link"/>
+  <!-- Output boundary -->
+  <rect x="31" y="419" width="460" height="52" rx="10" class="boundary"/>
+  <rect x="509" y="419" width="460" height="52" rx="10" class="boundary"/>
+  <text x="261" y="452" class="label">NHWC Output</text>
+  <text x="739" y="452" class="label">ONNX-order Output</text>
+  <!-- Scope of this illustration -->
+  <text x="31" y="499" class="note">Conventional NCHW rank-4 FP32 example; not a fixed operator sequence.</text>
+  <text x="31" y="520" class="note">Actual internal layouts and required transposes depend on operator constraints and layout analysis.</text>
+</svg>

@@ -71,8 +71,8 @@ jobs:
           command: |
             cd onnx-mlir/build
             cmake --build . --target onnx-mlir-docs
-            # Check whether dialect documentation is up-to-date.
-            # diff docs/Dialects ../docs/Dialects
+            # Generated dialect documentation is written to
+            # ../docs-onnx-mlir/Dialects in the source tree.
       - run:
           name: Print the Current Time
           command: date
